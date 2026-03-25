@@ -1,0 +1,14 @@
+.git/
+.qodo/
+.src-upstream-git/
+__pycache__/
+var/
+*.7z
+*.o
+*.a
+*.d
+supla-virtual-device
+supla-virtual-device.cfg
+src/**/Debug/
+src/**/Release/
+src/**/Test/

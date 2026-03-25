@@ -1,0 +1,68 @@
+[GLOBAL]
+device_name=SUPLA VIRTUAL DEVICE SHUTTER
+
+
+[SERVER]
+host=svrX.supla.org
+protocol_version=12
+
+[AUTH]
+email=you@example.com
+
+[MQTT]
+host=192.168.1.100
+port=1883
+username=mqtt-user
+password=mqtt-password
+client_name=supla-virtual-device-shutter
+
+[CHANNEL_0]
+function=TEMPERATURE_AND_HUMIDITY
+file=/home/pi/supla-filesensors/var/livingroom_temperature.txt
+
+[CHANNEL_1]
+function=TEMPERATURE
+file=/home/pi/supla-filesensors/var/raspberry_sdcard_free.txt
+min_interval_sec=300
+
+# example of getting payload switch 0/1 value
+
+[CHANNEL_2]
+function=POWERSWITCH
+state_topic=relays/switch/0/state
+command_topic=relays/switch/0/command
+command_template=$value$
+payload_on=1
+payload_off=1
+
+# example of getting payload dot separated temp and humidity value
+# example 25.4 78
+
+[CHANNEL_3]
+function=TEMPERATURE_AND_HUMIDITY
+state_topic=sensors/temphum/0/state
+
+# example of parsing json payload { "on": true }
+
+[CHANNEL_4]
+function=LIGHTSWITCH
+state_topic=relays/lightbulb/1/state
+command_topic=relays/lightbulb/1/command
+payload_value=/on
+payload_on=true
+payload_off=false
+
+[CHANNEL_5]
+function=WINDSENSOR
+state_topic=sensors/wind/0/state
+
+[CHANNEL_6]
+function=ROLLERSHUTTER
+state_topic=esphome/device/cover/shutter/position/state
+invert_state=1
+retain=0
+esphome_cover=1
+command_topic=esphome/device/cover/shutter/command
+position_command_topic=esphome/device/cover/shutter/position/command
+
+# this is a comment

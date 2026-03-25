@@ -1,0 +1,30 @@
+ifndef SSLDIR
+SSLDIR=/usr/src/openssl
+endif
+
+ifndef CC
+CC=gcc
+endif
+
+ifndef CXX
+CXX=g++
+endif
+
+ifeq ($(CC), cc)
+CC=gcc
+endif
+
+ifdef MYSQL
+LIBMYSQL=mysqlclient
+INCMYSQL=/usr/include/mysql
+else
+LIBMYSQL=mariadbclient
+INCMYSQL=/usr/include/mariadb
+ifeq (,$(wildcard $(INCMYSQL)))
+    INCMYSQL=/usr/include/mysql
+endif
+endif
+
+ifndef SSOCKET_WRITE_TO_FILE
+SSOCKET_WRITE_TO_FILE=0
+endif
