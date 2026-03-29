@@ -27,5 +27,9 @@
 #include "supla-client-lib/srpc.h"
 
 void publish_mqtt_message_for_channel(client_device_channel* channel);
+bool publish_thermostat_power_message_for_channel(client_device_channel* channel,
+                                                  unsigned char isOn);
+bool publish_thermostat_preset_message_for_channel(
+    client_device_channel* channel, unsigned char index, double temperature);
 
 #endif /* CLIENT_PUBLISHER_H_ */

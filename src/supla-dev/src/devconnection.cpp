@@ -36,9 +36,12 @@ typedef struct {
 
   char registered;
 
+  struct timeval registered_at;
   struct timeval last_call;
   unsigned char server_activity_timeout;
 } TDeviceConnectionData;
+
+#define INITIAL_CONFIG_DELAY_SEC 1
 
 int devconnection_socket_read(void *buf, int count, void *dcd) {
   return ssocket_read(((TDeviceConnectionData *)dcd)->ssd, NULL, buf, count);
@@ -120,10 +123,12 @@ void devconnection_on_register_result(
     case SUPLA_RESULTCODE_TRUE:
       dcd->registered = 1;
       dcd->server_activity_timeout = register_device_result->activity_timeout;
+      gettimeofday(&dcd->registered_at, NULL);
 
       channelio_setcalback_on_channel_value_changed(
           &devconnection_channel_valuechanged,
           &devconnection_channel_extendedValuechanged, dcd);
+      channelio_reset_runtime_config_tracking();
 
       supla_write_state_file(scfg_string(CFG_STATE_FILE), LOG_DEBUG,
                              "Registered and ready.");
@@ -195,8 +200,54 @@ void devconnection_channel_get_channel_state(
 
 void devconnection_channel_calcfg_request(
     TDeviceConnectionData *dcd, TSD_DeviceCalCfgRequest *cal_cfg_request) {
-  (void)dcd;
-  (void)cal_cfg_request;
+  if (dcd == NULL || cal_cfg_request == NULL) return;
+
+  TDS_DeviceCalCfgResult result;
+  memset(&result, 0, sizeof(TDS_DeviceCalCfgResult));
+
+  result.ReceiverID = cal_cfg_request->SenderID;
+  result.ChannelNumber = cal_cfg_request->ChannelNumber;
+  result.Command = cal_cfg_request->Command;
+  result.Result =
+      channelio_handle_calcfg_request(cal_cfg_request->ChannelNumber,
+                                      cal_cfg_request);
+
+  srpc_ds_async_device_calcfg_result(dcd->srpc, &result);
+}
+
+void devconnection_channel_config_request(TDeviceConnectionData *dcd,
+                                         TSDS_SetChannelConfig *config) {
+  if (dcd == NULL || config == NULL) return;
+
+  TSDS_SetChannelConfigResult result;
+  result.Result = channelio_handle_runtime_channel_config(config, &result);
+
+  srpc_ds_async_set_channel_config_result(dcd->srpc, &result);
+}
+
+void devconnection_device_config_request(TDeviceConnectionData *dcd,
+                                         TSDS_SetDeviceConfig *config) {
+  if (dcd == NULL || config == NULL) return;
+
+  TSDS_SetDeviceConfigResult result;
+  result.Result = channelio_handle_runtime_device_config(config, &result);
+
+  srpc_ds_async_set_device_config_result(dcd->srpc, &result);
+}
+
+void devconnection_send_initial_configs_if_needed(TDeviceConnectionData *dcd) {
+  if (dcd == NULL || dcd->registered != 1 || dcd->srpc == NULL) return;
+
+  if (dcd->registered_at.tv_sec == 0) return;
+
+  struct timeval now;
+  gettimeofday(&now, NULL);
+
+  if (now.tv_sec - dcd->registered_at.tv_sec < INITIAL_CONFIG_DELAY_SEC) {
+    return;
+  }
+
+  channelio_send_initial_configs_if_needed(dcd->srpc);
 }
 
 void devconnection_on_remote_call_received(void *_srpc, unsigned int rr_id,
@@ -223,10 +274,28 @@ void devconnection_on_remote_call_received(void *_srpc, unsigned int rr_id,
       case SUPLA_SD_CALL_DEVICE_CALCFG_REQUEST:
         devconnection_channel_calcfg_request(dcd,
                                              rd.data.sd_device_calcfg_request);
+        break;
 
       case SUPLA_CSD_CALL_GET_CHANNEL_STATE:
         devconnection_channel_get_channel_state(
             dcd, rd.data.csd_channel_state_request);
+        break;
+      case SUPLA_SD_CALL_SET_CHANNEL_CONFIG_RESULT:
+        supla_log(LOG_DEBUG, "received channel config result from server");
+        break;
+      case SUPLA_SD_CALL_SET_CHANNEL_CONFIG:
+        devconnection_channel_config_request(
+            dcd, rd.data.sds_set_channel_config_request);
+        break;
+      case SUPLA_SD_CALL_CHANNEL_CONFIG_FINISHED:
+        supla_log(LOG_DEBUG, "received channel config finished from server");
+        break;
+      case SUPLA_SD_CALL_SET_DEVICE_CONFIG:
+        devconnection_device_config_request(
+            dcd, rd.data.sds_set_device_config_request);
+        break;
+      case SUPLA_SD_CALL_SET_DEVICE_CONFIG_RESULT:
+        supla_log(LOG_DEBUG, "received device config result from server");
         break;
     }
     srpc_rd_free(&rd);
@@ -273,6 +342,9 @@ void devconnection_register(TDeviceConnectionData *dcd) {
 
     memcpy(srd.GUID, DEVICE_GUID, SUPLA_GUID_SIZE);
     memcpy(srd.AuthKey, DEVICE_AUTHKEY, SUPLA_AUTHKEY_SIZE);
+    if (channelio_required_proto_version() >= 21) {
+      srd.Flags |= SUPLA_DEVICE_FLAG_DEVICE_CONFIG_SUPPORTED;
+    }
 
     channelio_channels_to_srd_c(&srd.channel_count, srd.channels);
 
@@ -324,7 +396,19 @@ void devconnection_execute(void *user_data, void *sthread) {
         srpc_params.before_async_call = &devconnection_before_async_call;
         srpc_params.eh = eh;
         dcd.srpc = srpc_init(&srpc_params);
-        srpc_set_proto_version(dcd.srpc, scfg_int(CFG_PROTO));
+        unsigned char proto_version = scfg_int(CFG_PROTO);
+        unsigned char required_proto_version =
+            channelio_required_proto_version();
+
+        if (required_proto_version > proto_version) {
+          proto_version = required_proto_version;
+          supla_log(
+              LOG_INFO,
+              "forcing protocol version %d for configured channel support",
+              proto_version);
+        }
+
+        srpc_set_proto_version(dcd.srpc, proto_version);
 
         eh_add_fd(eh, ssocket_get_fd(dcd.ssd));
 
@@ -342,6 +426,7 @@ void devconnection_execute(void *user_data, void *sthread) {
             channelio_iterate();
 #endif
 
+            devconnection_send_initial_configs_if_needed(&dcd);
             devconnection_ping(&dcd);
           }
 

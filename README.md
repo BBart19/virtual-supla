@@ -16,22 +16,17 @@ e.g. RaspberryPi or any Raspberry-like creation, VPS, your laptop etc.
 # Supported sensors
 
 * `TEMPERATURE` - sends a value from file as a temperature
+* `HUMIDITY` - sends a single value as a humidity
 * `TEMPERATURE_AND_HUMIDITY` - sends two values for a temperature and humidity 
+* `GENERAL` - sends a single value as a general purpose measurement channel
+* `ELECTRICITY_METER` - sends a 1-phase or 3-phase electricity meter value with power, voltage, current and energy
+* `IC_ELECTRICITY_METER`, `IC_GAS_METER`, `IC_WATER_METER` - send an impulse-counter based meter value
 * `DISTANCESENSOR`, `PRESSURESENSOR`, `RAINSENSOR`, `WEIGHTSENSOR`, `WINDSENSOR`, `DEPTHSENSOR` - send a value from file pretending to be the corresponding sensor
 * `GATEWAYSENSOR`, `GATESENSOR`, `GARAGE_DOOR_SENSOR`, `NOLIQUID`, `DOORLOCKSENSOR`, `WINDOWSENSOR` - sends a 0/1 value from file to SUPLA 
-* **SOMEDAY**: `HUMIDITY` - sends a single value as a humidity (no corresponding hardware, but does not display any unit in the SUPLA app)
-* **SOMEDAY**: `GENERAL` - sends a single value to the [general purpose measurement channel type](https://forum.supla.org/viewtopic.php?f=17&t=5225) (to be released in the next upcoming SUPLA release)
-* **SOMEDAY**: `IC_ELECTRICITY_METER`, `IC_GAS_METER`, `IC_WATER_METER`
-
-Do not be mistaken that it can send only temperature and humidity values. It can be anything (see examples below).
-However, while waiting for the general purpose measurement channel in SUPLA, we must pretend these values are
-either temperature or humidity although they can mean completely different thing to you. Setting appropriate icon 
-and description should help.
 
 # Control device supported
 
-* `GATEWAYLOCK` `GATE` `GARAGEDOOR`, `DOORLOCK`, `POWERSWITCH`, `LIGHTSWITCH`, `ROLLERSHUTTER`
-* **SOMEDAY**: `DIMMER`, `RGBLIGHTNING`, `DIMMERANDRGB`
+* `GATEWAYLOCK` `GATE` `GARAGEDOOR`, `DOORLOCK`, `POWERSWITCH`, `LIGHTSWITCH`, `ROLLERSHUTTER`, `THERMOSTAT`, `THERMOSTAT_HEATPOL_HOMEPLUS`, `HVAC_THERMOSTAT`, `DIMMER`, `RGBLIGHTNING`, `DIMMERANDRGB`
 
 # Installation
 
@@ -115,6 +110,49 @@ For the other sensors like NOLIQUID or relay it should have one line with 0/1 va
 For `ROLLERSHUTTER` it should have one line with position in range `0-100`,
 where `0` means fully closed and `100` means fully open.
 
+For `THERMOSTAT`, `THERMOSTAT_HEATPOL_HOMEPLUS` and `HVAC_THERMOSTAT` it should have five lines:
+
+```
+0
+true
+21.5
+20.8
+0
+```
+
+These lines mean: `mode`, `power`, `preset temperature`, `measured temperature`, `fan`.
+Currently only `power`, `preset temperature` and `measured temperature` are used by
+`supla-virtual-device`. For `HVAC_THERMOSTAT` the file-based state is used for power
+and target temperature. If you want the normal SUPLA thermostat view to show the
+current temperature, add a separate `TEMPERATURE` channel and link it in SUPLA as
+the main thermometer for that HVAC thermostat.
+
+For `IC_ELECTRICITY_METER`, `IC_GAS_METER` and `IC_WATER_METER` the simplest file
+format is a single numeric total value, for example:
+
+```
+123.456
+```
+
+For electricity that means `123.456 kWh`. You can also use JSON if you want to
+provide a raw counter or optional metadata:
+
+```json
+{"counter":123456,"impulses_per_unit":1000,"unit":"kWh","price_per_unit":0.89,"currency":"PLN"}
+```
+
+For `ELECTRICITY_METER` the simplest file format is also a single total value:
+
+```
+123.456
+```
+
+For a richer 1-phase electricity meter view use JSON:
+
+```json
+{"total_kwh":123.456,"power_w":56.7,"voltage_v":229.8,"current_a":0.31,"frequency_hz":50.0}
+```
+
 That's it. Now, it's your job to fill these files with something interesting :-)
 
 
@@ -128,6 +166,196 @@ state_topic=sensors/temp/kitchen/state
    raw value means that in payload id should be raw single value like 23.5 (dot separated)
 * `invert_state`: optional `0/1` flag that inverts the incoming state before it is sent to SUPLA.
   For binary channels it swaps `0` and `1`. For `ROLLERSHUTTER` it converts `0-100` into `100-0`.
+
+For `HUMIDITY` use the same format with a single humidity value:
+
+```
+[CHANNEL_X]
+function=HUMIDITY
+state_topic=sensors/humidity/kitchen/state
+```
+
+For `GENERAL` use the same format with a single numeric value. You can also
+define how SUPLA should display it:
+
+```
+[CHANNEL_X]
+function=GENERAL
+state_topic=sensors/air_quality/pm25/state
+value_precision=1
+unit_after_value=ug/m3
+keep_history=1
+chart_type=linear
+```
+
+`value_divider`, `value_multiplier` and `value_added` are optional and use
+human-readable values from the config file. For example `value_multiplier=0.1`
+will be stored in the SUPLA runtime config as `100`.
+
+For `IC_ELECTRICITY_METER`, `IC_GAS_METER` and `IC_WATER_METER` you can use
+either a plain numeric payload with the total value or a JSON payload. The
+plain numeric payload is interpreted as a total value in the channel unit, for
+example:
+
+```
+[CHANNEL_X]
+function=IC_ELECTRICITY_METER
+state_topic=meters/energy/main/state
+```
+
+with payload:
+
+```
+123.456
+```
+
+You can also publish JSON:
+
+```json
+{"counter":123456,"impulses_per_unit":1000,"unit":"kWh","price_per_unit":0.89,"currency":"PLN"}
+```
+
+When you already have a nested JSON total, `payload_value` can point to it, for
+example `/total_kwh`.
+
+For `ELECTRICITY_METER` you can use the same simple numeric payload with total
+energy or a JSON payload. The 1-phase JSON format supported by
+`supla-virtual-device` is:
+
+```json
+{"total_kwh":123.456,"power_w":56.7,"voltage_v":229.8,"current_a":0.31,"frequency_hz":50.0}
+```
+
+Optional fields are:
+* `total_reverse_active_energy_kwh`
+* `total_forward_reactive_energy_kvarh`
+* `total_reverse_reactive_energy_kvarh`
+* `power_reactive_var`
+* `power_apparent_va`
+* `power_factor`
+* `phase_angle_deg`
+* `period_sec`
+
+You can also split the measurements into separate MQTT topics:
+
+```ini
+[CHANNEL_X]
+function=ELECTRICITY_METER
+energy_topic=meters/energy/phase1/total_kwh/state
+power_topic=meters/energy/phase1/power_w/state
+voltage_topic=meters/energy/phase1/voltage_v/state
+current_topic=meters/energy/phase1/current_a/state
+frequency_topic=meters/energy/phase1/frequency_hz/state
+```
+
+Each of these topics should publish a single numeric value. The old single
+`state_topic` JSON format still works too.
+
+For ESPHome integrations make sure you use the exact published sensor topic.
+For most ESPHome sensors this means the topic ends with `/state`, for example
+`gniazdko-1-ig007-bk7231n/sensor/bl0942_energy/state`.
+
+For a 3-phase meter you can use:
+
+```ini
+[CHANNEL_X]
+function=ELECTRICITY_METER
+energy_topic_l1=meters/energy/l1/total_kwh/state
+energy_topic_l2=meters/energy/l2/total_kwh/state
+energy_topic_l3=meters/energy/l3/total_kwh/state
+power_topic_l1=meters/energy/l1/power_w/state
+power_topic_l2=meters/energy/l2/power_w/state
+power_topic_l3=meters/energy/l3/power_w/state
+voltage_topic_l1=meters/energy/l1/voltage_v/state
+voltage_topic_l2=meters/energy/l2/voltage_v/state
+voltage_topic_l3=meters/energy/l3/voltage_v/state
+current_topic_l1=meters/energy/l1/current_a/state
+current_topic_l2=meters/energy/l2/current_a/state
+current_topic_l3=meters/energy/l3/current_a/state
+frequency_topic=meters/energy/frequency_hz/state
+```
+
+The old names without suffix, like `power_topic` or `energy_topic`, still map
+to phase 1.
+
+Additional optional per-phase topics supported for 3-phase meters are:
+* `reactive_power_topic_l1`, `reactive_power_topic_l2`, `reactive_power_topic_l3`
+* `apparent_power_topic_l1`, `apparent_power_topic_l2`, `apparent_power_topic_l3`
+* `power_factor_topic_l1`, `power_factor_topic_l2`, `power_factor_topic_l3`
+* `phase_angle_topic_l1`, `phase_angle_topic_l2`, `phase_angle_topic_l3`
+* `returned_energy_topic_l1`, `returned_energy_topic_l2`, `returned_energy_topic_l3`
+* `inductive_energy_topic_l1`, `inductive_energy_topic_l2`, `inductive_energy_topic_l3`
+* `capacitive_energy_topic_l1`, `capacitive_energy_topic_l2`, `capacitive_energy_topic_l3`
+
+Aliases are also accepted:
+* `power_reactive_topic_lX` for `reactive_power_topic_lX`
+* `power_apparent_topic_lX` for `apparent_power_topic_lX`
+* `reverse_active_energy_topic_lX` for `returned_energy_topic_lX`
+* `forward_reactive_energy_topic_lX` for `inductive_energy_topic_lX`
+* `reverse_reactive_energy_topic_lX` for `capacitive_energy_topic_lX`
+
+If a given measurement topic is not configured, `supla-virtual-device` does not
+set the corresponding availability flag for that measurement type. In practice
+that means the app should only show sections for the measurements you actually
+provide.
+
+For `DIMMER`, `RGBLIGHTNING` and `DIMMERANDRGB` you can read state from MQTT.
+The simplest supported layout is:
+
+```
+[CHANNEL_X]
+function=DIMMER
+state_topic=lights/kitchen/state
+brightness_topic=lights/kitchen/brightness/state
+command_topic=lights/kitchen/command
+command_template={"state":"$state$","brightness":$brightness$}
+payload_on=ON
+payload_off=OFF
+```
+
+For RGB use optional `color_topic` and `color_brightness_topic`:
+
+```
+[CHANNEL_X]
+function=DIMMERANDRGB
+state_topic=lights/desk/state
+brightness_topic=lights/desk/brightness/state
+color_brightness_topic=lights/desk/color_brightness/state
+color_topic=lights/desk/color/state
+command_topic=lights/desk/command
+command_template={"state":"$state$","brightness":$brightness$,"color_brightness":$color_brightness$,"color":"$hex_color$","r":$red$,"g":$green$,"b":$blue$}
+payload_on=ON
+payload_off=OFF
+```
+
+Supported raw MQTT/file formats:
+
+* `DIMMER`: single brightness value `0-100`
+* `RGBLIGHTNING`: `#RRGGBB`, `0xRRGGBB`, `R G B`, optionally followed by color brightness `0-100`
+* `DIMMERANDRGB`: `brightness color_brightness R G B` and optional trailing `on_off`
+
+For RGB command templates these placeholders are available:
+
+* `$state$` / `$value$` - state payload, for example `ON` / `OFF`
+* `$on_off$` - numeric `1` or `0`
+* `$brightness$`
+* `$color_brightness$`
+* `$red$`, `$green$`, `$blue$`
+* `$color$` - `0xRRGGBB`
+* `$hex_color$` - `#RRGGBB`
+
+For `TEMPERATURE_AND_HUMIDITY` you can also use two separate MQTT topics:
+
+```
+[CHANNEL_X]
+function=TEMPERATURE_AND_HUMIDITY
+temperature_topic=pendrive-3/sensor/sht40_temperatura/state
+humidity_topic=pendrive-3/sensor/sht40_wilgotnosc/state
+```
+
+When `temperature_topic` and `humidity_topic` are used, `supla-virtual-device`
+updates the combined temperature and humidity channel whenever either topic changes.
+The old single `state_topic` format with both values in one payload still works too.
 
 # Sensors with data from MQTT (Json)
 ```
@@ -218,6 +446,68 @@ position_command_topic=esp32c3-bl0939/cover/zaluzja/position/command
 * `esphome_cover=1`: enables native conversion of SUPLA shutter commands into ESPHome MQTT cover commands
 * `command_topic`: receives `OPEN`, `CLOSE` and `STOP`
 * `position_command_topic`: receives target open percentage for swipe gestures
+
+# Publishing MQTT thermostat command
+```
+[CHANNEL_X]
+function=THERMOSTAT_HEATPOL_HOMEPLUS
+state_topic=esphome/device/climate/room/mode/state
+payload_on=heat
+payload_off=off
+command_topic=esphome/device/climate/room/mode/command
+command_template_on=heat
+command_template_off=off
+measured_temperature_topic=esphome/device/climate/room/current_temperature/state
+preset_temperature_topic=esphome/device/climate/room/target_temperature/state
+preset_temperature_command_topic=esphome/device/climate/room/target_temperature/command
+preset_temperature_command_template=$value$
+```
+* `function=THERMOSTAT_HEATPOL_HOMEPLUS`: enables the thermostat UI currently supported by the SUPLA app
+* `state_topic`: current thermostat power/mode topic interpreted with `payload_on` and `payload_off`
+* `command_topic`: MQTT topic used for thermostat `on/off` commands from SUPLA
+* `command_template_on`, `command_template_off`: payloads published for turning the thermostat on and off
+* `measured_temperature_topic`: raw current temperature topic
+* `preset_temperature_topic`: raw target temperature topic
+* `preset_temperature_command_topic`: topic that receives target temperature set from the SUPLA app
+* `preset_temperature_command_template`: optional payload template for target temperature commands. Supported placeholders: `$value$`, `$temperature$`, `$index$`
+
+Current MQTT thermostat support focuses on the main controls that are most useful with external systems:
+`on/off`, measured temperature and target temperature. Advanced Heatpol-specific modes and schedule commands are not translated to MQTT yet.
+
+# Publishing MQTT HVAC thermostat command
+```
+[CHANNEL_X]
+function=HVAC_THERMOSTAT
+hvac_subfunction=heat
+main_thermometer_channel_no=Y
+state_topic=esphome/device/climate/room/mode/state
+payload_on=heat
+payload_off=off
+command_topic=esphome/device/climate/room/mode/command
+command_template_on=heat
+command_template_off=off
+preset_temperature_topic=esphome/device/climate/room/target_temperature/state
+preset_temperature_command_topic=esphome/device/climate/room/target_temperature/command
+preset_temperature_command_template=$value$
+```
+* `function=HVAC_THERMOSTAT`: enables the normal SUPLA thermostat UI
+* `hvac_subfunction`: `heat` or `cool`; it tells SUPLA whether this is a heating or cooling thermostat
+* `main_thermometer_channel_no`: optional number of a local `TEMPERATURE` or `TEMPERATURE_AND_HUMIDITY` channel used as the HVAC main thermometer
+* `state_topic`: current HVAC mode topic interpreted with `payload_on` and `payload_off`
+* `command_topic`: MQTT topic used for thermostat `on/off` commands from SUPLA
+* `command_template_on`, `command_template_off`: payloads published for turning the thermostat on and off
+* `preset_temperature_topic`: raw target temperature topic
+* `preset_temperature_command_topic`: topic that receives target temperature set from the SUPLA app
+* `preset_temperature_command_template`: optional payload template for target temperature commands. Supported placeholders: `$value$`, `$temperature$`, `$index$`
+
+If you also want the current temperature to be visible inside the normal SUPLA thermostat screen,
+add a separate `TEMPERATURE` or `TEMPERATURE_AND_HUMIDITY` channel for the same MQTT source and
+set its channel number in `main_thermometer_channel_no`. If you omit it, `supla-virtual-device`
+will try to auto-detect the first local temperature channel.
+
+Program mode for `HVAC_THERMOSTAT` is handled locally by `supla-virtual-device` using the
+weekly schedule received from SUPLA. When the program changes, the virtual device publishes the
+resulting MQTT `command_topic` and `preset_temperature_command_topic` values automatically.
 
 # Autostarting
 

@@ -67,8 +67,67 @@ void channelio_set_mcp23008_gpio_val(unsigned char number, unsigned char value);
 void channelio_set_mcp23008_gpio_port(unsigned char number, unsigned char port);
 void channelio_set_mqtt_topic_in(unsigned char number, const char *value);
 void channelio_set_mqtt_topic_out(unsigned char number, const char *value);
+void channelio_set_mqtt_temperature_topic_in(unsigned char number,
+                                             const char *value);
+void channelio_set_mqtt_humidity_topic_in(unsigned char number,
+                                          const char *value);
+void channelio_set_mqtt_voltage_topic_in(unsigned char number,
+                                         const char *value);
+void channelio_set_mqtt_voltage_topic_phase_in(unsigned char number,
+                                               unsigned char phase,
+                                               const char *value);
+void channelio_set_mqtt_current_topic_in(unsigned char number,
+                                         const char *value);
+void channelio_set_mqtt_current_topic_phase_in(unsigned char number,
+                                               unsigned char phase,
+                                               const char *value);
+void channelio_set_mqtt_power_topic_in(unsigned char number,
+                                       const char *value);
+void channelio_set_mqtt_power_topic_phase_in(unsigned char number,
+                                             unsigned char phase,
+                                             const char *value);
+void channelio_set_mqtt_energy_topic_in(unsigned char number,
+                                        const char *value);
+void channelio_set_mqtt_energy_topic_phase_in(unsigned char number,
+                                              unsigned char phase,
+                                              const char *value);
+void channelio_set_mqtt_frequency_topic_in(unsigned char number,
+                                           const char *value);
+void channelio_set_mqtt_reactive_power_topic_phase_in(unsigned char number,
+                                                      unsigned char phase,
+                                                      const char *value);
+void channelio_set_mqtt_apparent_power_topic_phase_in(unsigned char number,
+                                                      unsigned char phase,
+                                                      const char *value);
+void channelio_set_mqtt_power_factor_topic_phase_in(unsigned char number,
+                                                    unsigned char phase,
+                                                    const char *value);
+void channelio_set_mqtt_phase_angle_topic_phase_in(unsigned char number,
+                                                   unsigned char phase,
+                                                   const char *value);
+void channelio_set_mqtt_returned_energy_topic_phase_in(unsigned char number,
+                                                       unsigned char phase,
+                                                       const char *value);
+void channelio_set_mqtt_inductive_energy_topic_phase_in(unsigned char number,
+                                                        unsigned char phase,
+                                                        const char *value);
+void channelio_set_mqtt_capacitive_energy_topic_phase_in(unsigned char number,
+                                                         unsigned char phase,
+                                                         const char *value);
+void channelio_set_mqtt_brightness_topic_in(unsigned char number,
+                                            const char *value);
+void channelio_set_mqtt_color_brightness_topic_in(unsigned char number,
+                                                  const char *value);
+void channelio_set_mqtt_color_topic_in(unsigned char number,
+                                       const char *value);
+void channelio_set_mqtt_measured_temperature_topic_in(unsigned char number,
+                                                      const char *value);
+void channelio_set_mqtt_preset_temperature_topic_in(unsigned char number,
+                                                    const char *value);
 void channelio_set_mqtt_position_topic_out(unsigned char number,
                                            const char *value);
+void channelio_set_mqtt_preset_temperature_topic_out(unsigned char number,
+                                                     const char *value);
 
 void channelio_set_mqtt_template_in(unsigned char number, const char *value);
 void channelio_set_mqtt_template_out(unsigned char number, const char *value);
@@ -76,16 +135,53 @@ void channelio_set_mqtt_template_on_out(unsigned char number,
                                         const char *value);
 void channelio_set_mqtt_template_off_out(unsigned char number,
                                          const char *value);
+void channelio_set_mqtt_preset_temperature_template_out(unsigned char number,
+                                                        const char *value);
 
 void channelio_set_mqtt_retain(unsigned char number, unsigned char value);
 void channelio_set_invert_state(unsigned char number, unsigned char value);
 void channelio_set_esphome_cover(unsigned char number, unsigned char value);
+void channelio_set_esphome_rgbw(unsigned char number, unsigned char value);
+void channelio_set_hvac_subfunction(unsigned char number, const char *value);
+void channelio_set_hvac_main_thermometer_channel(unsigned char number,
+                                                 unsigned char channelNo);
+void channelio_set_general_value_divider(unsigned char number,
+                                         _supla_int_t value);
+void channelio_set_general_value_multiplier(unsigned char number,
+                                            _supla_int_t value);
+void channelio_set_general_value_added(unsigned char number,
+                                       _supla_int64_t value);
+void channelio_set_general_value_precision(unsigned char number,
+                                           unsigned char value);
+void channelio_set_general_unit_before_value(unsigned char number,
+                                             const char *value);
+void channelio_set_general_unit_after_value(unsigned char number,
+                                            const char *value);
+void channelio_set_general_no_space_before_value(unsigned char number,
+                                                 unsigned char value);
+void channelio_set_general_no_space_after_value(unsigned char number,
+                                                unsigned char value);
+void channelio_set_general_keep_history(unsigned char number,
+                                        unsigned char value);
+void channelio_set_general_chart_type(unsigned char number,
+                                      unsigned char value);
+void channelio_set_general_refresh_interval_ms(unsigned char number,
+                                               unsigned short value);
 void channelio_set_battery_powered(unsigned char number, unsigned char value);
 
 void channelio_get_value(unsigned char number,
                          char value[SUPLA_CHANNELVALUE_SIZE]);
 char channelio_set_value(unsigned char number, char hi[SUPLA_CHANNELVALUE_SIZE],
                          unsigned int time_ms);
+char channelio_handle_calcfg_request(unsigned char number,
+                                     TSD_DeviceCalCfgRequest *request);
+unsigned char channelio_required_proto_version(void);
+void channelio_reset_runtime_config_tracking(void);
+void channelio_send_initial_configs_if_needed(void *srpc);
+char channelio_handle_runtime_channel_config(
+    TSDS_SetChannelConfig *request, TSDS_SetChannelConfigResult *result);
+char channelio_handle_runtime_device_config(
+    TSDS_SetDeviceConfig *request, TSDS_SetDeviceConfigResult *result);
 
 void channelio_channels_to_srd_c(unsigned char *channel_count,
                                  TDS_SuplaDeviceChannel_C *channels);
@@ -105,6 +201,7 @@ void channelio_channels_set_mqtt_callback(void (*subscribe_response_callback)(
 
 void channelio_raise_mqtt_valuechannged(client_device_channel *channel);
 void channelio_raise_execute_command(client_device_channel *channel);
+void channelio_raise_valuechanged(client_device_channel *channel);
 
 // TMP TEST
 void tmp_channelio_raise_valuechanged(unsigned char number);

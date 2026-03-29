@@ -42,6 +42,85 @@ payload_off=1
 function=TEMPERATURE_AND_HUMIDITY
 state_topic=sensors/temphum/0/state
 
+[CHANNEL_31]
+function=HUMIDITY
+state_topic=sensors/humidity/0/state
+
+[CHANNEL_32]
+function=GENERAL
+state_topic=sensors/general/0/state
+value_precision=1
+unit_after_value=ppm
+keep_history=1
+chart_type=linear
+
+[CHANNEL_34]
+function=IC_ELECTRICITY_METER
+state_topic=meters/energy/main/state
+# simplest payload example: 123.456
+# JSON is also supported, e.g.
+# {"counter":123456,"impulses_per_unit":1000,"unit":"kWh","price_per_unit":0.89,"currency":"PLN"}
+
+[CHANNEL_35]
+function=ELECTRICITY_METER
+state_topic=meters/energy/phase1/state
+# simplest payload example: 123.456
+# richer 1-phase JSON example:
+# {"total_kwh":123.456,"power_w":56.7,"voltage_v":229.8,"current_a":0.31,"frequency_hz":50.0}
+
+[CHANNEL_36]
+function=ELECTRICITY_METER
+energy_topic=meters/energy/phase1/total_kwh/state
+power_topic=meters/energy/phase1/power_w/state
+voltage_topic=meters/energy/phase1/voltage_v/state
+current_topic=meters/energy/phase1/current_a/state
+frequency_topic=meters/energy/phase1/frequency_hz/state
+
+[CHANNEL_37]
+function=ELECTRICITY_METER
+energy_topic_l1=meters/energy/l1/total_kwh/state
+energy_topic_l2=meters/energy/l2/total_kwh/state
+energy_topic_l3=meters/energy/l3/total_kwh/state
+power_topic_l1=meters/energy/l1/power_w/state
+power_topic_l2=meters/energy/l2/power_w/state
+power_topic_l3=meters/energy/l3/power_w/state
+voltage_topic_l1=meters/energy/l1/voltage_v/state
+voltage_topic_l2=meters/energy/l2/voltage_v/state
+voltage_topic_l3=meters/energy/l3/voltage_v/state
+current_topic_l1=meters/energy/l1/current_a/state
+current_topic_l2=meters/energy/l2/current_a/state
+current_topic_l3=meters/energy/l3/current_a/state
+frequency_topic=meters/energy/frequency_hz/state
+# optional extras:
+# reactive_power_topic_l1=meters/energy/l1/reactive_power_var/state
+# reactive_power_topic_l2=meters/energy/l2/reactive_power_var/state
+# reactive_power_topic_l3=meters/energy/l3/reactive_power_var/state
+# apparent_power_topic_l1=meters/energy/l1/apparent_power_va/state
+# apparent_power_topic_l2=meters/energy/l2/apparent_power_va/state
+# apparent_power_topic_l3=meters/energy/l3/apparent_power_va/state
+# power_factor_topic_l1=meters/energy/l1/power_factor/state
+# power_factor_topic_l2=meters/energy/l2/power_factor/state
+# power_factor_topic_l3=meters/energy/l3/power_factor/state
+# phase_angle_topic_l1=meters/energy/l1/phase_angle_deg/state
+# phase_angle_topic_l2=meters/energy/l2/phase_angle_deg/state
+# phase_angle_topic_l3=meters/energy/l3/phase_angle_deg/state
+# returned_energy_topic_l1=meters/energy/l1/returned_kwh/state
+# returned_energy_topic_l2=meters/energy/l2/returned_kwh/state
+# returned_energy_topic_l3=meters/energy/l3/returned_kwh/state
+# inductive_energy_topic_l1=meters/energy/l1/inductive_kvarh/state
+# inductive_energy_topic_l2=meters/energy/l2/inductive_kvarh/state
+# inductive_energy_topic_l3=meters/energy/l3/inductive_kvarh/state
+# capacitive_energy_topic_l1=meters/energy/l1/capacitive_kvarh/state
+# capacitive_energy_topic_l2=meters/energy/l2/capacitive_kvarh/state
+# capacitive_energy_topic_l3=meters/energy/l3/capacitive_kvarh/state
+
+# example of getting temperature and humidity from two separate MQTT topics
+
+[CHANNEL_33]
+function=TEMPERATURE_AND_HUMIDITY
+temperature_topic=sensors/temphum/0/temperature/state
+humidity_topic=sensors/temphum/0/humidity/state
+
 # example of parsing json payload { "on": true }
 
 [CHANNEL_4]
@@ -56,6 +135,36 @@ payload_off=false
 function=WINDSENSOR
 state_topic=sensors/wind/0/state
 
+[CHANNEL_51]
+function=DIMMER
+state_topic=lights/dimmer/0/state
+brightness_topic=lights/dimmer/0/brightness/state
+command_topic=lights/dimmer/0/command
+command_template={"state":"$state$","brightness":$brightness$}
+payload_on=ON
+payload_off=OFF
+
+[CHANNEL_52]
+function=RGBLIGHTNING
+state_topic=lights/rgb/0/state
+color_brightness_topic=lights/rgb/0/color_brightness/state
+color_topic=lights/rgb/0/color/state
+command_topic=lights/rgb/0/command
+command_template={"state":"$state$","color_brightness":$color_brightness$,"color":"$hex_color$"}
+payload_on=ON
+payload_off=OFF
+
+[CHANNEL_53]
+function=DIMMERANDRGB
+state_topic=lights/rgbw/0/state
+brightness_topic=lights/rgbw/0/brightness/state
+color_brightness_topic=lights/rgbw/0/color_brightness/state
+color_topic=lights/rgbw/0/color/state
+command_topic=lights/rgbw/0/command
+command_template={"state":"$state$","brightness":$brightness$,"color_brightness":$color_brightness$,"color":"$hex_color$","r":$red$,"g":$green$,"b":$blue$}
+payload_on=ON
+payload_off=OFF
+
 [CHANNEL_6]
 function=ROLLERSHUTTER
 state_topic=esphome/device/cover/shutter/position/state
@@ -64,5 +173,36 @@ retain=0
 esphome_cover=1
 command_topic=esphome/device/cover/shutter/command
 position_command_topic=esphome/device/cover/shutter/position/command
+
+[CHANNEL_7]
+function=THERMOSTAT_HEATPOL_HOMEPLUS
+state_topic=esphome/device/climate/room/mode/state
+payload_on=heat
+payload_off=off
+command_topic=esphome/device/climate/room/mode/command
+command_template_on=heat
+command_template_off=off
+measured_temperature_topic=esphome/device/climate/room/current_temperature/state
+preset_temperature_topic=esphome/device/climate/room/target_temperature/state
+preset_temperature_command_topic=esphome/device/climate/room/target_temperature/command
+preset_temperature_command_template=$value$
+
+[CHANNEL_8]
+function=HVAC_THERMOSTAT
+hvac_subfunction=heat
+main_thermometer_channel_no=9
+state_topic=esphome/device/climate/room/mode/state
+payload_on=heat
+payload_off=off
+command_topic=esphome/device/climate/room/mode/command
+command_template_on=heat
+command_template_off=off
+preset_temperature_topic=esphome/device/climate/room/target_temperature/state
+preset_temperature_command_topic=esphome/device/climate/room/target_temperature/command
+preset_temperature_command_template=$value$
+
+[CHANNEL_9]
+function=TEMPERATURE
+state_topic=esphome/device/climate/room/current_temperature/state
 
 # this is a comment

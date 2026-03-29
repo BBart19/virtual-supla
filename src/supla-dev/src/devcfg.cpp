@@ -18,6 +18,7 @@
 
 #include "devcfg.h"
 
+#include <limits>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -69,7 +70,8 @@ static int decode_function_type(const char *fnc) {
     return SUPLA_CHANNELFNC_LIGHTSWITCH;
   } else if (strcasecmp(fnc, "DIMMER") == 0) {
     return SUPLA_CHANNELFNC_DIMMER;
-  } else if (strcasecmp(fnc, "RGBLIGHTNING") == 0) {
+  } else if (strcasecmp(fnc, "RGBLIGHTNING") == 0 ||
+             strcasecmp(fnc, "RGBLIGHTING") == 0) {
     return SUPLA_CHANNELFNC_RGBLIGHTING;
   } else if (strcasecmp(fnc, "DIMMERANDRGB") == 0) {
     return SUPLA_CHANNELFNC_DIMMERANDRGBLIGHTING;
@@ -89,6 +91,8 @@ static int decode_function_type(const char *fnc) {
     return SUPLA_CHANNELFNC_STAIRCASETIMER;
   } else if (strcasecmp(fnc, "IC_ELECTRICITY_METER") == 0) {
     return SUPLA_CHANNELFNC_IC_ELECTRICITY_METER;
+  } else if (strcasecmp(fnc, "ELECTRICITY_METER") == 0) {
+    return SUPLA_CHANNELFNC_ELECTRICITY_METER;
   } else if (strcasecmp(fnc, "IC_GAS_METER") == 0) {
     return SUPLA_CHANNELFNC_IC_GAS_METER;
   } else if (strcasecmp(fnc, "IC_WATER_METER") == 0) {
@@ -103,7 +107,11 @@ static int decode_function_type(const char *fnc) {
     return SUPLA_CHANNELFNC_VALVE_OPENCLOSE;
   } else if (strcasecmp(fnc, "THERMOSTAT") == 0) {
     return SUPLA_CHANNELFNC_THERMOSTAT;
-  } else if (strcasecmp(fnc, "THERMOSTAT_HEATPOOL")) {
+  } else if (strcasecmp(fnc, "HVAC_THERMOSTAT") == 0) {
+    return SUPLA_CHANNELFNC_HVAC_THERMOSTAT;
+  } else if (strcasecmp(fnc, "THERMOSTAT_HEATPOL_HOMEPLUS") == 0 ||
+             strcasecmp(fnc, "THERMOSTAT_HEATPOL") == 0 ||
+             strcasecmp(fnc, "THERMOSTAT_HEATPOOL") == 0) {
     return SUPLA_CHANNELFNC_THERMOSTAT_HEATPOL_HOMEPLUS;
   } else
     return SUPLA_CHANNELFNC_NONE;
@@ -142,11 +150,91 @@ static int decode_channel_type(const char *type) {
     return SUPLA_CHANNELTYPE_VALVE_OPENCLOSE;
   } else if (strcasecmp(type, "THERMOSTAT") == 0) {
     return SUPLA_CHANNELTYPE_THERMOSTAT;
-  } else if (strcasecmp(type, "THERMOSTAT_HEATPOOL") == 0) {
+  } else if (strcasecmp(type, "HVAC") == 0) {
+    return SUPLA_CHANNELTYPE_HVAC;
+  } else if (strcasecmp(type, "THERMOSTAT_HEATPOL_HOMEPLUS") == 0 ||
+             strcasecmp(type, "THERMOSTAT_HEATPOL") == 0 ||
+             strcasecmp(type, "THERMOSTAT_HEATPOOL") == 0) {
     return SUPLA_CHANNELTYPE_THERMOSTAT_HEATPOL_HOMEPLUS;
   }
 
   return atoi(type);
+}
+
+static int decode_general_chart_type(const char *value) {
+  if (strcasecmp(value, "linear") == 0) {
+    return SUPLA_GENERAL_PURPOSE_MEASUREMENT_CHART_TYPE_LINEAR;
+  } else if (strcasecmp(value, "bar") == 0) {
+    return SUPLA_GENERAL_PURPOSE_MEASUREMENT_CHART_TYPE_BAR;
+  } else if (strcasecmp(value, "candle") == 0) {
+    return SUPLA_GENERAL_PURPOSE_MEASUREMENT_CHART_TYPE_CANDLE;
+  }
+
+  return atoi(value);
+}
+
+static _supla_int_t parse_general_scaled_value(const char *value) {
+  double parsed = strtod(value, NULL) * 1000.0;
+
+  if (parsed > std::numeric_limits<_supla_int_t>::max()) {
+    parsed = std::numeric_limits<_supla_int_t>::max();
+  } else if (parsed < std::numeric_limits<_supla_int_t>::min()) {
+    parsed = std::numeric_limits<_supla_int_t>::min();
+  }
+
+  return static_cast<_supla_int_t>(parsed >= 0 ? parsed + 0.5 : parsed - 0.5);
+}
+
+static _supla_int64_t parse_general_scaled_value64(const char *value) {
+  double parsed = strtod(value, NULL) * 1000.0;
+
+  if (parsed > static_cast<double>(std::numeric_limits<_supla_int64_t>::max())) {
+    parsed = static_cast<double>(std::numeric_limits<_supla_int64_t>::max());
+  } else if (parsed <
+             static_cast<double>(std::numeric_limits<_supla_int64_t>::min())) {
+    parsed = static_cast<double>(std::numeric_limits<_supla_int64_t>::min());
+  }
+
+  return static_cast<_supla_int64_t>(parsed >= 0 ? parsed + 0.5
+                                                 : parsed - 0.5);
+}
+
+static int decode_electricity_measurement_phase(const char *name,
+                                                const char *measurement) {
+  if (name == NULL || measurement == NULL) return -1;
+
+  const char *patterns[] = {"%s_topic", "state_%s_topic", "state_%s"};
+  char buffer[64];
+  char phasedBuffer[70];
+
+  for (int phase = 0; phase < 3; phase++) {
+    for (size_t idx = 0; idx < sizeof(patterns) / sizeof(patterns[0]); idx++) {
+      snprintf(buffer, sizeof(buffer), patterns[idx], measurement);
+
+      if (phase == 0 && strcasecmp(name, buffer) == 0) {
+        return 0;
+      }
+
+      snprintf(phasedBuffer, sizeof(phasedBuffer), "%s_l%d", buffer, phase + 1);
+      if (strcasecmp(name, phasedBuffer) == 0) {
+        return phase;
+      }
+    }
+  }
+
+  return -1;
+}
+
+static int decode_electricity_measurement_phase_aliases(
+    const char *name, const char **aliases, size_t aliasCount) {
+  if (name == NULL || aliases == NULL) return -1;
+
+  for (size_t idx = 0; idx < aliasCount; idx++) {
+    int phase = decode_electricity_measurement_phase(name, aliases[idx]);
+    if (phase >= 0) return phase;
+  }
+
+  return -1;
 }
 /*
 static int decode_channel_driver(const char *type) {
@@ -171,6 +259,20 @@ void devcfg_channel_cfg(const char *section, const char *name,
   }
 
   unsigned char number = atoi(&section[sec_name_len]);
+  int electricityPhase = -1;
+  static const char *reactivePowerAliases[] = {"reactive_power",
+                                               "power_reactive"};
+  static const char *apparentPowerAliases[] = {"apparent_power",
+                                               "power_apparent"};
+  static const char *returnedEnergyAliases[] = {"returned_energy",
+                                                "reverse_active_energy",
+                                                "active_energy_returned"};
+  static const char *inductiveEnergyAliases[] = {"inductive_energy",
+                                                 "forward_reactive_energy",
+                                                 "reactive_energy_inductive"};
+  static const char *capacitiveEnergyAliases[] = {"capacitive_energy",
+                                                  "reverse_reactive_energy",
+                                                  "reactive_energy_capacitive"};
 
   if (strcasecmp(name, "type") == 0) {
     channelio_set_type(number, decode_channel_type(value));
@@ -188,9 +290,98 @@ void devcfg_channel_cfg(const char *section, const char *name,
     channelio_set_mqtt_topic_in(number, value);
   } else if (strcasecmp(name, "command_topic") == 0 && strlen(value) > 0) {
     channelio_set_mqtt_topic_out(number, value);
+  } else if (strcasecmp(name, "temperature_topic") == 0 &&
+             strlen(value) > 0) {
+    channelio_set_mqtt_temperature_topic_in(number, value);
+  } else if (strcasecmp(name, "humidity_topic") == 0 &&
+             strlen(value) > 0) {
+    channelio_set_mqtt_humidity_topic_in(number, value);
+  } else if ((electricityPhase =
+                  decode_electricity_measurement_phase(name, "voltage")) >= 0 &&
+             strlen(value) > 0) {
+    channelio_set_mqtt_voltage_topic_phase_in(number, electricityPhase, value);
+  } else if ((electricityPhase =
+                  decode_electricity_measurement_phase(name, "current")) >= 0 &&
+             strlen(value) > 0) {
+    channelio_set_mqtt_current_topic_phase_in(number, electricityPhase, value);
+  } else if ((electricityPhase =
+                  decode_electricity_measurement_phase(name, "power")) >= 0 &&
+             strlen(value) > 0) {
+    channelio_set_mqtt_power_topic_phase_in(number, electricityPhase, value);
+  } else if ((electricityPhase =
+                  decode_electricity_measurement_phase(name, "energy")) >= 0 &&
+             strlen(value) > 0) {
+    channelio_set_mqtt_energy_topic_phase_in(number, electricityPhase, value);
+  } else if ((electricityPhase = decode_electricity_measurement_phase_aliases(
+                  name, reactivePowerAliases,
+                  sizeof(reactivePowerAliases) / sizeof(reactivePowerAliases[0]))) >= 0 &&
+             strlen(value) > 0) {
+    channelio_set_mqtt_reactive_power_topic_phase_in(number, electricityPhase,
+                                                     value);
+  } else if ((electricityPhase = decode_electricity_measurement_phase_aliases(
+                  name, apparentPowerAliases,
+                  sizeof(apparentPowerAliases) / sizeof(apparentPowerAliases[0]))) >= 0 &&
+             strlen(value) > 0) {
+    channelio_set_mqtt_apparent_power_topic_phase_in(number, electricityPhase,
+                                                     value);
+  } else if ((electricityPhase =
+                  decode_electricity_measurement_phase(name, "power_factor")) >=
+                 0 &&
+             strlen(value) > 0) {
+    channelio_set_mqtt_power_factor_topic_phase_in(number, electricityPhase,
+                                                   value);
+  } else if ((electricityPhase =
+                  decode_electricity_measurement_phase(name, "phase_angle")) >=
+                 0 &&
+             strlen(value) > 0) {
+    channelio_set_mqtt_phase_angle_topic_phase_in(number, electricityPhase,
+                                                  value);
+  } else if ((electricityPhase = decode_electricity_measurement_phase_aliases(
+                  name, returnedEnergyAliases,
+                  sizeof(returnedEnergyAliases) / sizeof(returnedEnergyAliases[0]))) >= 0 &&
+             strlen(value) > 0) {
+    channelio_set_mqtt_returned_energy_topic_phase_in(number, electricityPhase,
+                                                      value);
+  } else if ((electricityPhase = decode_electricity_measurement_phase_aliases(
+                  name, inductiveEnergyAliases,
+                  sizeof(inductiveEnergyAliases) /
+                      sizeof(inductiveEnergyAliases[0]))) >= 0 &&
+             strlen(value) > 0) {
+    channelio_set_mqtt_inductive_energy_topic_phase_in(number, electricityPhase,
+                                                       value);
+  } else if ((electricityPhase = decode_electricity_measurement_phase_aliases(
+                  name, capacitiveEnergyAliases,
+                  sizeof(capacitiveEnergyAliases) /
+                      sizeof(capacitiveEnergyAliases[0]))) >= 0 &&
+             strlen(value) > 0) {
+    channelio_set_mqtt_capacitive_energy_topic_phase_in(
+        number, electricityPhase, value);
+  } else if ((strcasecmp(name, "frequency_topic") == 0 ||
+              strcasecmp(name, "state_frequency_topic") == 0 ||
+              strcasecmp(name, "state_frequency") == 0) &&
+             strlen(value) > 0) {
+    channelio_set_mqtt_frequency_topic_in(number, value);
+  } else if (strcasecmp(name, "brightness_topic") == 0 &&
+             strlen(value) > 0) {
+    channelio_set_mqtt_brightness_topic_in(number, value);
+  } else if (strcasecmp(name, "color_brightness_topic") == 0 &&
+             strlen(value) > 0) {
+    channelio_set_mqtt_color_brightness_topic_in(number, value);
+  } else if (strcasecmp(name, "color_topic") == 0 &&
+             strlen(value) > 0) {
+    channelio_set_mqtt_color_topic_in(number, value);
+  } else if (strcasecmp(name, "measured_temperature_topic") == 0 &&
+             strlen(value) > 0) {
+    channelio_set_mqtt_measured_temperature_topic_in(number, value);
+  } else if (strcasecmp(name, "preset_temperature_topic") == 0 &&
+             strlen(value) > 0) {
+    channelio_set_mqtt_preset_temperature_topic_in(number, value);
   } else if (strcasecmp(name, "position_command_topic") == 0 &&
              strlen(value) > 0) {
     channelio_set_mqtt_position_topic_out(number, value);
+  } else if (strcasecmp(name, "preset_temperature_command_topic") == 0 &&
+             strlen(value) > 0) {
+    channelio_set_mqtt_preset_temperature_topic_out(number, value);
   } else if (strcasecmp(name, "retain") == 0 && strlen(value) == 1) {
     channelio_set_mqtt_retain(number, atoi(value));
   } else if (strcasecmp(name, "invert_state") == 0 && strlen(value) == 1) {
@@ -198,6 +389,45 @@ void devcfg_channel_cfg(const char *section, const char *name,
   } else if (strcasecmp(name, "esphome_cover") == 0 &&
              strlen(value) == 1) {
     channelio_set_esphome_cover(number, atoi(value));
+  } else if (strcasecmp(name, "esphome_rgbw") == 0 &&
+             strlen(value) == 1) {
+    channelio_set_esphome_rgbw(number, atoi(value));
+  } else if (strcasecmp(name, "hvac_subfunction") == 0 && strlen(value) > 0) {
+    channelio_set_hvac_subfunction(number, value);
+  } else if (strcasecmp(name, "main_thermometer_channel_no") == 0 &&
+             strlen(value) > 0) {
+    channelio_set_hvac_main_thermometer_channel(number, atoi(value));
+  } else if (strcasecmp(name, "value_divider") == 0 && strlen(value) > 0) {
+    channelio_set_general_value_divider(number,
+                                        parse_general_scaled_value(value));
+  } else if (strcasecmp(name, "value_multiplier") == 0 &&
+             strlen(value) > 0) {
+    channelio_set_general_value_multiplier(number,
+                                           parse_general_scaled_value(value));
+  } else if (strcasecmp(name, "value_added") == 0 && strlen(value) > 0) {
+    channelio_set_general_value_added(number,
+                                      parse_general_scaled_value64(value));
+  } else if (strcasecmp(name, "value_precision") == 0 && strlen(value) > 0) {
+    channelio_set_general_value_precision(number, atoi(value));
+  } else if (strcasecmp(name, "unit_before_value") == 0 &&
+             strlen(value) > 0) {
+    channelio_set_general_unit_before_value(number, value);
+  } else if (strcasecmp(name, "unit_after_value") == 0 &&
+             strlen(value) > 0) {
+    channelio_set_general_unit_after_value(number, value);
+  } else if (strcasecmp(name, "no_space_before_value") == 0 &&
+             strlen(value) == 1) {
+    channelio_set_general_no_space_before_value(number, atoi(value));
+  } else if (strcasecmp(name, "no_space_after_value") == 0 &&
+             strlen(value) == 1) {
+    channelio_set_general_no_space_after_value(number, atoi(value));
+  } else if (strcasecmp(name, "keep_history") == 0 && strlen(value) == 1) {
+    channelio_set_general_keep_history(number, atoi(value));
+  } else if (strcasecmp(name, "chart_type") == 0 && strlen(value) > 0) {
+    channelio_set_general_chart_type(number, decode_general_chart_type(value));
+  } else if (strcasecmp(name, "refresh_interval_ms") == 0 &&
+             strlen(value) > 0) {
+    channelio_set_general_refresh_interval_ms(number, atoi(value) % 65536);
   } else if (strcasecmp(name, "state_tamplate") == 0 && strlen(value) > 0) {
     channelio_set_mqtt_template_in(number, value);
   } else if (strcasecmp(name, "command_template") == 0 && strlen(value) > 0) {
@@ -208,6 +438,9 @@ void devcfg_channel_cfg(const char *section, const char *name,
   } else if (strcasecmp(name, "command_template_off") == 0 &&
              strlen(value) > 0) {
     channelio_set_mqtt_template_off_out(number, value);
+  } else if (strcasecmp(name, "preset_temperature_command_template") == 0 &&
+             strlen(value) > 0) {
+    channelio_set_mqtt_preset_temperature_template_out(number, value);
   } else if (strcasecmp(name, "payload_on") == 0 && strlen(value) > 0) {
     channelio_set_payload_on(number, value);
   } else if (strcasecmp(name, "payload_off") == 0 && strlen(value) > 0) {
@@ -266,7 +499,7 @@ unsigned char devcfg_init(int argc, char *argv[]) {
   scfg_add_int_param(s_server, "tcp_port", 2015);
   scfg_add_int_param(s_server, "ssl_port", 2016);
   scfg_add_bool_param(s_server, "ssl_enabled", 1);
-  scfg_add_int_param(s_server, "protocol_version", SUPLA_PROTO_VERSION);
+  scfg_add_int_param(s_server, "protocol_version", 21);
 
   scfg_add_int_param(s_location, "ID", 0);
   scfg_add_str_param(s_location, "PASSWORD", 0);

@@ -24,9 +24,9 @@
 #include <string.h>
 #include <unistd.h>
 
-void* mqtt_deamon_thread;
-struct reconnect_state_t* reconnect_state;
-struct mqtt_client* mq_client;
+void* mqtt_deamon_thread = NULL;
+struct reconnect_state_t* reconnect_state = NULL;
+struct mqtt_client* mq_client = NULL;
 
 void reconnect_client(struct mqtt_client* client, void** reconnect_state_vptr);
 
@@ -209,6 +209,7 @@ void mqtt_client_free() {
 
   if (mqtt_deamon_thread != NULL) {
     sthread_twf(mqtt_deamon_thread);
+    mqtt_deamon_thread = NULL;
   }
 
   if (mq_client != NULL && mq_client->socketfd != -1)
@@ -217,7 +218,11 @@ void mqtt_client_free() {
     free(reconnect_state->recvbuf);
     free(reconnect_state->sendbuf);
     delete reconnect_state;
+    reconnect_state = NULL;
   }
 
-  if (mq_client != NULL) delete mq_client;
+  if (mq_client != NULL) {
+    delete mq_client;
+    mq_client = NULL;
+  }
 }

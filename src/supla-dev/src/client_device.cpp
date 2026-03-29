@@ -18,6 +18,49 @@
 
 #include "client_device.h"
 
+#include <limits>
+
+#include "supla-client-lib/srpc.h"
+
+namespace {
+
+bool is_thermostat_function(int function) {
+  return function == SUPLA_CHANNELFNC_THERMOSTAT ||
+         function == SUPLA_CHANNELFNC_THERMOSTAT_HEATPOL_HOMEPLUS;
+}
+
+bool is_hvac_thermostat_function(int function) {
+  return function == SUPLA_CHANNELFNC_HVAC_THERMOSTAT;
+}
+
+_supla_int16_t thermostat_temperature_to_raw(double temperature) {
+  double scaled = temperature * 100.0;
+
+  if (scaled > std::numeric_limits<_supla_int16_t>::max()) {
+    scaled = std::numeric_limits<_supla_int16_t>::max();
+  } else if (scaled < std::numeric_limits<_supla_int16_t>::min()) {
+    scaled = std::numeric_limits<_supla_int16_t>::min();
+  }
+
+  return static_cast<_supla_int16_t>(scaled >= 0 ? scaled + 0.5 : scaled - 0.5);
+}
+
+void push_topic_if_set(std::vector<std::string> *vect, const std::string &topic) {
+  if (vect == NULL || topic.length() == 0) return;
+
+  for (const std::string &existing : *vect) {
+    if (existing == topic) return;
+  }
+
+  vect->push_back(topic);
+}
+
+bool topic_matches(const std::string &candidate, const std::string &topic) {
+  return candidate.length() > 0 && candidate.compare(topic) == 0;
+}
+
+}  // namespace
+
 client_device_channel::client_device_channel(int number) {
   this->number = number;
   this->type = 0;
@@ -31,11 +74,42 @@ client_device_channel::client_device_channel(int number) {
   this->payloadValue = "";
   this->stateTopic = "";
   this->commandTopic = "";
+  this->temperatureTopic = "";
+  this->humidityTopic = "";
+  this->voltageTopic = "";
+  this->voltageTopicL2 = "";
+  this->voltageTopicL3 = "";
+  this->currentTopic = "";
+  this->currentTopicL2 = "";
+  this->currentTopicL3 = "";
+  this->powerTopic = "";
+  this->powerTopicL2 = "";
+  this->powerTopicL3 = "";
+  this->energyTopic = "";
+  this->energyTopicL2 = "";
+  this->energyTopicL3 = "";
+  this->frequencyTopic = "";
+  for (int idx = 0; idx < 3; idx++) {
+    this->reactivePowerTopic[idx] = "";
+    this->apparentPowerTopic[idx] = "";
+    this->powerFactorTopic[idx] = "";
+    this->phaseAngleTopic[idx] = "";
+    this->returnedEnergyTopic[idx] = "";
+    this->inductiveEnergyTopic[idx] = "";
+    this->capacitiveEnergyTopic[idx] = "";
+  }
+  this->brightnessTopic = "";
+  this->colorBrightnessTopic = "";
+  this->colorTopic = "";
+  this->measuredTemperatureTopic = "";
+  this->presetTemperatureTopic = "";
   this->positionCommandTopic = "";
+  this->presetTemperatureCommandTopic = "";
   this->stateTemplate = "";
   this->commandTemplate = "";
   this->commandTemplateOn = "";
   this->commandTemplateOff = "";
+  this->presetTemperatureCommandTemplate = "";
   this->execute = "";
   this->executeOn = "";
   this->executeOff = "";
@@ -46,13 +120,40 @@ client_device_channel::client_device_channel(int number) {
   this->batteryPowered = false;
   this->invertState = false;
   this->esphomeCover = false;
+  this->esphomeRgbw = false;
+  this->hvacSubfunctionCool = false;
+  this->generalNoSpaceBeforeValue = false;
+  this->generalNoSpaceAfterValue = false;
+  this->generalKeepHistory = false;
+  this->hvacMainThermometerChannelNo = 0;
+  this->generalValuePrecision = 2;
+  this->generalChartType =
+      SUPLA_GENERAL_PURPOSE_MEASUREMENT_CHART_TYPE_LINEAR;
   this->batteryLevel = 0;
+  this->generalValueDivider = 1000;
+  this->generalValueMultiplier = 1000;
+  this->generalValueAdded = 0;
+  this->generalRefreshIntervalMs = 0;
+  this->generalUnitBeforeValue = "";
+  this->generalUnitAfterValue = "";
+  this->rememberedRgbwColor = 0xFFFFFF;
+  this->rememberedRgbwColorBrightness = 100;
+  this->rememberedRgbwBrightness = 100;
 
   this->last = (struct timeval){0};
+  memset(this->value, 0, sizeof(this->value));
+  this->extendedValue = NULL;
 
   this->lck = lck_init();
 }
-client_device_channel::~client_device_channel() { lck_free(lck); }
+client_device_channel::~client_device_channel() {
+  if (extendedValue != NULL) {
+    delete extendedValue;
+    extendedValue = NULL;
+  }
+
+  lck_free(lck);
+}
 
 bool client_device_channel::getToggled(void) { return this->toggled; }
 
@@ -173,6 +274,7 @@ void client_device_channel::getDouble(double *result) {
     case SUPLA_CHANNELFNC_WINDSENSOR:
     case SUPLA_CHANNELFNC_PRESSURESENSOR:
     case SUPLA_CHANNELFNC_RAINSENSOR:
+    case SUPLA_CHANNELFNC_GENERAL_PURPOSE_MEASUREMENT:
     case SUPLA_CHANNELFNC_WEIGHTSENSOR:
       memcpy(result, this->value, sizeof(double));
       break;
@@ -262,7 +364,19 @@ bool client_device_channel::getRGBW(int *color, char *color_brightness,
     result = true;
   }
 
+  if (result && on_off != NULL) {
+    *on_off = this->value[5];
+  }
+
   return result;
+}
+void client_device_channel::getRememberedRGBW(int *color,
+                                              char *color_brightness,
+                                              char *brightness) {
+  if (color != NULL) *color = this->rememberedRgbwColor;
+  if (color_brightness != NULL)
+    *color_brightness = this->rememberedRgbwColorBrightness;
+  if (brightness != NULL) *brightness = this->rememberedRgbwBrightness;
 }
 char client_device_channel::getChar(void) { return this->value[0]; }
 void client_device_channel::setValue(char value[SUPLA_CHANNELVALUE_SIZE]) {
@@ -300,12 +414,17 @@ void client_device_channel::setTempHum(double temp, double humidity) {
 void client_device_channel::setRGBW(int color, char color_brightness,
                                     char brightness, char on_off) {
   char tmp_value[SUPLA_CHANNELVALUE_SIZE];
+  memset(tmp_value, 0, sizeof(tmp_value));
 
   if (this->function == SUPLA_CHANNELFNC_DIMMER ||
       this->function == SUPLA_CHANNELFNC_DIMMERANDRGBLIGHTING) {
     if (brightness < 0 || brightness > 100) brightness = 0;
 
     tmp_value[0] = brightness;
+
+    if (brightness > 0) {
+      this->rememberedRgbwBrightness = brightness;
+    }
   }
 
   if (this->function == SUPLA_CHANNELFNC_RGBLIGHTING ||
@@ -316,12 +435,165 @@ void client_device_channel::setRGBW(int color, char color_brightness,
     tmp_value[2] = (char)((color & 0x000000FF));
     tmp_value[3] = (char)((color & 0x0000FF00) >> 8);
     tmp_value[4] = (char)((color & 0x00FF0000) >> 16);
-    tmp_value[5] = on_off;
+
+    if (color_brightness > 0) {
+      this->rememberedRgbwColorBrightness = color_brightness;
+    }
+
+    if (color != 0) {
+      this->rememberedRgbwColor = color;
+    }
   }
+
+  tmp_value[5] = on_off;
 
   setValue(tmp_value);
 }
 void client_device_channel::setChar(char chr) { value[0] = chr; }
+
+bool client_device_channel::getThermostat(TThermostat_Value *thermostatValue) {
+  if (thermostatValue == NULL || !is_thermostat_function(this->function)) {
+    return false;
+  }
+
+  char tmp_value[SUPLA_CHANNELVALUE_SIZE];
+  getValue(tmp_value);
+  memcpy(thermostatValue, tmp_value, sizeof(TThermostat_Value));
+
+  return true;
+}
+
+bool client_device_channel::getHvac(THVACValue *hvacValue) {
+  if (hvacValue == NULL || !is_hvac_thermostat_function(this->function)) {
+    return false;
+  }
+
+  char tmp_value[SUPLA_CHANNELVALUE_SIZE];
+  getValue(tmp_value);
+  memcpy(hvacValue, tmp_value, sizeof(THVACValue));
+
+  return true;
+}
+
+void client_device_channel::updateThermostatState(bool hasOn, bool on,
+                                                  bool hasMeasuredTemperature,
+                                                  double measuredTemperature,
+                                                  bool hasPresetTemperature,
+                                                  double presetTemperature) {
+  if (!is_thermostat_function(this->function)) return;
+
+  char tmp_value[SUPLA_CHANNELVALUE_SIZE];
+  TThermostat_Value thermostatValue;
+  TSuplaChannelExtendedValue extendedValue;
+  TThermostat_ExtendedValue thermostatExtendedValue;
+
+  memset(tmp_value, 0, sizeof(tmp_value));
+  memset(&thermostatValue, 0, sizeof(thermostatValue));
+  memset(&extendedValue, 0, sizeof(extendedValue));
+  memset(&thermostatExtendedValue, 0, sizeof(thermostatExtendedValue));
+
+  getValue(tmp_value);
+  memcpy(&thermostatValue, tmp_value, sizeof(TThermostat_Value));
+
+  if (hasOn) {
+    thermostatValue.IsOn = on ? 1 : 0;
+  }
+
+  if (hasMeasuredTemperature) {
+    thermostatValue.MeasuredTemperature =
+        thermostat_temperature_to_raw(measuredTemperature);
+  }
+
+  if (hasPresetTemperature) {
+    thermostatValue.PresetTemperature =
+        thermostat_temperature_to_raw(presetTemperature);
+  }
+
+  memset(tmp_value, 0, sizeof(tmp_value));
+  memcpy(tmp_value, &thermostatValue, sizeof(TThermostat_Value));
+  setValue(tmp_value);
+
+  if (getExtendedValue(&extendedValue)) {
+    if (!srpc_evtool_v1_extended2thermostatextended(
+            &extendedValue, &thermostatExtendedValue)) {
+      memset(&thermostatExtendedValue, 0, sizeof(thermostatExtendedValue));
+    }
+  }
+
+  thermostatExtendedValue.Fields |= THERMOSTAT_FIELD_Flags |
+                                    THERMOSTAT_FIELD_MeasuredTemperatures |
+                                    THERMOSTAT_FIELD_PresetTemperatures;
+  thermostatExtendedValue.MeasuredTemperature[0] =
+      thermostatValue.MeasuredTemperature;
+  thermostatExtendedValue.PresetTemperature[0] = thermostatValue.PresetTemperature;
+
+  thermostatExtendedValue.Flags[4] &= ~SUPLA_THERMOSTAT_VALUE_FLAG_ON;
+  if (thermostatValue.IsOn) {
+    thermostatExtendedValue.Flags[4] |= SUPLA_THERMOSTAT_VALUE_FLAG_ON;
+  }
+
+  if (srpc_evtool_v1_thermostatextended2extended(&thermostatExtendedValue,
+                                                 &extendedValue)) {
+    setExtendedValue(&extendedValue);
+  }
+}
+
+void client_device_channel::updateHvacState(bool hasOn, bool on,
+                                            bool hasSetpointTemperature,
+                                            double setpointTemperature) {
+  if (!is_hvac_thermostat_function(this->function)) return;
+
+  char tmp_value[SUPLA_CHANNELVALUE_SIZE];
+  THVACValue hvacValue;
+
+  memset(tmp_value, 0, sizeof(tmp_value));
+  memset(&hvacValue, 0, sizeof(hvacValue));
+
+  getValue(tmp_value);
+  memcpy(&hvacValue, tmp_value, sizeof(THVACValue));
+
+  hvacValue.Flags &= ~(SUPLA_HVAC_VALUE_FLAG_HEATING |
+                       SUPLA_HVAC_VALUE_FLAG_COOLING |
+                       SUPLA_HVAC_VALUE_FLAG_COOL);
+
+  if (this->hvacSubfunctionCool) {
+    hvacValue.Flags |= SUPLA_HVAC_VALUE_FLAG_COOL;
+  }
+
+  if (hasOn) {
+    hvacValue.IsOn = on ? 1 : 0;
+    if (!on) {
+      hvacValue.Mode = SUPLA_HVAC_MODE_OFF;
+    } else if (hvacValue.Mode == SUPLA_HVAC_MODE_OFF ||
+               hvacValue.Mode == SUPLA_HVAC_MODE_NOT_SET) {
+      hvacValue.Mode =
+          this->hvacSubfunctionCool ? SUPLA_HVAC_MODE_COOL
+                                    : SUPLA_HVAC_MODE_HEAT;
+    }
+  }
+
+  if (hasSetpointTemperature) {
+    _supla_int16_t rawSetpoint =
+        thermostat_temperature_to_raw(setpointTemperature);
+
+    if (this->hvacSubfunctionCool) {
+      hvacValue.SetpointTemperatureHeat = 0;
+      hvacValue.Flags &= ~SUPLA_HVAC_VALUE_FLAG_SETPOINT_TEMP_HEAT_SET;
+      hvacValue.SetpointTemperatureCool = rawSetpoint;
+      hvacValue.Flags |= SUPLA_HVAC_VALUE_FLAG_SETPOINT_TEMP_COOL_SET;
+    } else {
+      hvacValue.SetpointTemperatureCool = 0;
+      hvacValue.Flags &= ~SUPLA_HVAC_VALUE_FLAG_SETPOINT_TEMP_COOL_SET;
+      hvacValue.SetpointTemperatureHeat = rawSetpoint;
+      hvacValue.Flags |= SUPLA_HVAC_VALUE_FLAG_SETPOINT_TEMP_HEAT_SET;
+    }
+  }
+
+  memset(tmp_value, 0, sizeof(tmp_value));
+  memcpy(tmp_value, &hvacValue, sizeof(THVACValue));
+  setValue(tmp_value);
+}
+
 int client_device_channel::getType(void) {
   if (this->type == 0) {
     switch (this->function) {
@@ -408,6 +680,9 @@ int client_device_channel::getType(void) {
       case SUPLA_CHANNELFNC_THERMOSTAT_HEATPOL_HOMEPLUS:
         this->type = SUPLA_CHANNELTYPE_THERMOSTAT_HEATPOL_HOMEPLUS;
         break;
+      case SUPLA_CHANNELFNC_HVAC_THERMOSTAT:
+        this->type = SUPLA_CHANNELTYPE_HVAC;
+        break;
       case SUPLA_CHANNELFNC_VALVE_OPENCLOSE:  // ver. >= 12
         this->type = SUPLA_CHANNELTYPE_VALVE_OPENCLOSE;
         break;
@@ -416,7 +691,6 @@ int client_device_channel::getType(void) {
         break;
 
       case SUPLA_CHANNELFNC_GENERAL_PURPOSE_MEASUREMENT:
-        break;
         this->type = SUPLA_CHANNELTYPE_GENERAL_PURPOSE_MEASUREMENT;
         break;
       case SUPLA_CHANNELFNC_CONTROLLINGTHEENGINESPEED:
@@ -462,8 +736,110 @@ std::string client_device_channel::getStateTopic(void) {
 std::string client_device_channel::getCommandTopic(void) {
   return this->commandTopic;
 }
+std::string client_device_channel::getTemperatureTopic(void) {
+  return this->temperatureTopic;
+}
+std::string client_device_channel::getHumidityTopic(void) {
+  return this->humidityTopic;
+}
+std::string client_device_channel::getVoltageTopic(void) {
+  return this->voltageTopic;
+}
+std::string client_device_channel::getVoltageTopic(unsigned char phase) {
+  switch (phase) {
+    case 1:
+      return this->voltageTopicL2;
+    case 2:
+      return this->voltageTopicL3;
+    default:
+      return this->voltageTopic;
+  }
+}
+std::string client_device_channel::getCurrentTopic(void) {
+  return this->currentTopic;
+}
+std::string client_device_channel::getCurrentTopic(unsigned char phase) {
+  switch (phase) {
+    case 1:
+      return this->currentTopicL2;
+    case 2:
+      return this->currentTopicL3;
+    default:
+      return this->currentTopic;
+  }
+}
+std::string client_device_channel::getPowerTopic(void) {
+  return this->powerTopic;
+}
+std::string client_device_channel::getPowerTopic(unsigned char phase) {
+  switch (phase) {
+    case 1:
+      return this->powerTopicL2;
+    case 2:
+      return this->powerTopicL3;
+    default:
+      return this->powerTopic;
+  }
+}
+std::string client_device_channel::getEnergyTopic(void) {
+  return this->energyTopic;
+}
+std::string client_device_channel::getEnergyTopic(unsigned char phase) {
+  switch (phase) {
+    case 1:
+      return this->energyTopicL2;
+    case 2:
+      return this->energyTopicL3;
+    default:
+      return this->energyTopic;
+  }
+}
+std::string client_device_channel::getFrequencyTopic(void) {
+  return this->frequencyTopic;
+}
+std::string client_device_channel::getReactivePowerTopic(unsigned char phase) {
+  return phase < 3 ? this->reactivePowerTopic[phase] : "";
+}
+std::string client_device_channel::getApparentPowerTopic(unsigned char phase) {
+  return phase < 3 ? this->apparentPowerTopic[phase] : "";
+}
+std::string client_device_channel::getPowerFactorTopic(unsigned char phase) {
+  return phase < 3 ? this->powerFactorTopic[phase] : "";
+}
+std::string client_device_channel::getPhaseAngleTopic(unsigned char phase) {
+  return phase < 3 ? this->phaseAngleTopic[phase] : "";
+}
+std::string client_device_channel::getReturnedEnergyTopic(unsigned char phase) {
+  return phase < 3 ? this->returnedEnergyTopic[phase] : "";
+}
+std::string client_device_channel::getInductiveEnergyTopic(
+    unsigned char phase) {
+  return phase < 3 ? this->inductiveEnergyTopic[phase] : "";
+}
+std::string client_device_channel::getCapacitiveEnergyTopic(
+    unsigned char phase) {
+  return phase < 3 ? this->capacitiveEnergyTopic[phase] : "";
+}
+std::string client_device_channel::getBrightnessTopic(void) {
+  return this->brightnessTopic;
+}
+std::string client_device_channel::getColorBrightnessTopic(void) {
+  return this->colorBrightnessTopic;
+}
+std::string client_device_channel::getColorTopic(void) {
+  return this->colorTopic;
+}
+std::string client_device_channel::getMeasuredTemperatureTopic(void) {
+  return this->measuredTemperatureTopic;
+}
+std::string client_device_channel::getPresetTemperatureTopic(void) {
+  return this->presetTemperatureTopic;
+}
 std::string client_device_channel::getPositionCommandTopic(void) {
   return this->positionCommandTopic;
+}
+std::string client_device_channel::getPresetTemperatureCommandTopic(void) {
+  return this->presetTemperatureCommandTopic;
 }
 std::string client_device_channel::getStateTemplate(void) {
   return this->stateTemplate;
@@ -477,6 +853,9 @@ std::string client_device_channel::getCommandTemplateOn(void) {
 std::string client_device_channel::getCommandTemplateOff(void) {
   return this->commandTemplateOff;
 }
+std::string client_device_channel::getPresetTemperatureCommandTemplate(void) {
+  return this->presetTemperatureCommandTemplate;
+}
 std::string client_device_channel::getExecute(void) { return this->execute; }
 std::string client_device_channel::getExecuteOn(void) {
   return this->executeOn;
@@ -489,12 +868,58 @@ bool client_device_channel::getInvertState(void) { return this->invertState; }
 bool client_device_channel::getEsphomeCover(void) {
   return this->esphomeCover;
 }
+bool client_device_channel::getEsphomeRgbw(void) {
+  return this->esphomeRgbw;
+}
+bool client_device_channel::getHvacSubfunctionCool(void) {
+  return this->hvacSubfunctionCool;
+}
+unsigned char client_device_channel::getHvacMainThermometerChannelNo(void) {
+  return this->hvacMainThermometerChannelNo;
+}
+_supla_int_t client_device_channel::getGeneralValueDivider(void) {
+  return this->generalValueDivider;
+}
+_supla_int_t client_device_channel::getGeneralValueMultiplier(void) {
+  return this->generalValueMultiplier;
+}
+_supla_int64_t client_device_channel::getGeneralValueAdded(void) {
+  return this->generalValueAdded;
+}
+unsigned char client_device_channel::getGeneralValuePrecision(void) {
+  return this->generalValuePrecision;
+}
+std::string client_device_channel::getGeneralUnitBeforeValue(void) {
+  return this->generalUnitBeforeValue;
+}
+std::string client_device_channel::getGeneralUnitAfterValue(void) {
+  return this->generalUnitAfterValue;
+}
+bool client_device_channel::getGeneralNoSpaceBeforeValue(void) {
+  return this->generalNoSpaceBeforeValue;
+}
+bool client_device_channel::getGeneralNoSpaceAfterValue(void) {
+  return this->generalNoSpaceAfterValue;
+}
+bool client_device_channel::getGeneralKeepHistory(void) {
+  return this->generalKeepHistory;
+}
+unsigned char client_device_channel::getGeneralChartType(void) {
+  return this->generalChartType;
+}
+unsigned short client_device_channel::getGeneralRefreshIntervalMs(void) {
+  return this->generalRefreshIntervalMs;
+}
 bool client_device_channel::getOnline(void) { return this->online; }
 long client_device_channel::getLastSeconds(void) { return this->last.tv_sec; }
 
 void client_device_channel::setType(int type) { this->type = type; }
 void client_device_channel::setFunction(int function) {
   this->function = function;
+
+  if (function == SUPLA_CHANNELFNC_HUMIDITYANDTEMPERATURE) {
+    setTempHum(-275, -1);
+  }
 }
 
 void client_device_channel::setIdTemplate(const char *idTemplate) {
@@ -524,9 +949,163 @@ void client_device_channel::setStateTopic(const char *stateTopic) {
 void client_device_channel::setCommandTopic(const char *commandTopic) {
   this->commandTopic = std::string(commandTopic);
 }
+void client_device_channel::setTemperatureTopic(const char *temperatureTopic) {
+  this->temperatureTopic = std::string(temperatureTopic);
+}
+void client_device_channel::setHumidityTopic(const char *humidityTopic) {
+  this->humidityTopic = std::string(humidityTopic);
+}
+void client_device_channel::setVoltageTopic(const char *voltageTopic) {
+  this->voltageTopic = std::string(voltageTopic);
+}
+void client_device_channel::setVoltageTopic(unsigned char phase,
+                                            const char *voltageTopic) {
+  std::string value = voltageTopic == NULL ? "" : std::string(voltageTopic);
+
+  switch (phase) {
+    case 1:
+      this->voltageTopicL2 = value;
+      break;
+    case 2:
+      this->voltageTopicL3 = value;
+      break;
+    default:
+      this->voltageTopic = value;
+      break;
+  }
+}
+void client_device_channel::setCurrentTopic(const char *currentTopic) {
+  this->currentTopic = std::string(currentTopic);
+}
+void client_device_channel::setCurrentTopic(unsigned char phase,
+                                            const char *currentTopic) {
+  std::string value = currentTopic == NULL ? "" : std::string(currentTopic);
+
+  switch (phase) {
+    case 1:
+      this->currentTopicL2 = value;
+      break;
+    case 2:
+      this->currentTopicL3 = value;
+      break;
+    default:
+      this->currentTopic = value;
+      break;
+  }
+}
+void client_device_channel::setPowerTopic(const char *powerTopic) {
+  this->powerTopic = std::string(powerTopic);
+}
+void client_device_channel::setPowerTopic(unsigned char phase,
+                                          const char *powerTopic) {
+  std::string value = powerTopic == NULL ? "" : std::string(powerTopic);
+
+  switch (phase) {
+    case 1:
+      this->powerTopicL2 = value;
+      break;
+    case 2:
+      this->powerTopicL3 = value;
+      break;
+    default:
+      this->powerTopic = value;
+      break;
+  }
+}
+void client_device_channel::setEnergyTopic(const char *energyTopic) {
+  this->energyTopic = std::string(energyTopic);
+}
+void client_device_channel::setEnergyTopic(unsigned char phase,
+                                           const char *energyTopic) {
+  std::string value = energyTopic == NULL ? "" : std::string(energyTopic);
+
+  switch (phase) {
+    case 1:
+      this->energyTopicL2 = value;
+      break;
+    case 2:
+      this->energyTopicL3 = value;
+      break;
+    default:
+      this->energyTopic = value;
+      break;
+  }
+}
+void client_device_channel::setFrequencyTopic(const char *frequencyTopic) {
+  this->frequencyTopic = std::string(frequencyTopic);
+}
+void client_device_channel::setReactivePowerTopic(unsigned char phase,
+                                                  const char *topic) {
+  if (phase < 3) {
+    this->reactivePowerTopic[phase] =
+        topic == NULL ? "" : std::string(topic);
+  }
+}
+void client_device_channel::setApparentPowerTopic(unsigned char phase,
+                                                  const char *topic) {
+  if (phase < 3) {
+    this->apparentPowerTopic[phase] =
+        topic == NULL ? "" : std::string(topic);
+  }
+}
+void client_device_channel::setPowerFactorTopic(unsigned char phase,
+                                                const char *topic) {
+  if (phase < 3) {
+    this->powerFactorTopic[phase] = topic == NULL ? "" : std::string(topic);
+  }
+}
+void client_device_channel::setPhaseAngleTopic(unsigned char phase,
+                                               const char *topic) {
+  if (phase < 3) {
+    this->phaseAngleTopic[phase] = topic == NULL ? "" : std::string(topic);
+  }
+}
+void client_device_channel::setReturnedEnergyTopic(unsigned char phase,
+                                                   const char *topic) {
+  if (phase < 3) {
+    this->returnedEnergyTopic[phase] = topic == NULL ? "" : std::string(topic);
+  }
+}
+void client_device_channel::setInductiveEnergyTopic(unsigned char phase,
+                                                    const char *topic) {
+  if (phase < 3) {
+    this->inductiveEnergyTopic[phase] =
+        topic == NULL ? "" : std::string(topic);
+  }
+}
+void client_device_channel::setCapacitiveEnergyTopic(unsigned char phase,
+                                                     const char *topic) {
+  if (phase < 3) {
+    this->capacitiveEnergyTopic[phase] =
+        topic == NULL ? "" : std::string(topic);
+  }
+}
+void client_device_channel::setBrightnessTopic(const char *brightnessTopic) {
+  this->brightnessTopic = std::string(brightnessTopic);
+}
+void client_device_channel::setColorBrightnessTopic(
+    const char *colorBrightnessTopic) {
+  this->colorBrightnessTopic = std::string(colorBrightnessTopic);
+}
+void client_device_channel::setColorTopic(const char *colorTopic) {
+  this->colorTopic = std::string(colorTopic);
+}
+void client_device_channel::setMeasuredTemperatureTopic(
+    const char *measuredTemperatureTopic) {
+  this->measuredTemperatureTopic = std::string(measuredTemperatureTopic);
+}
+void client_device_channel::setPresetTemperatureTopic(
+    const char *presetTemperatureTopic) {
+  this->presetTemperatureTopic = std::string(presetTemperatureTopic);
+}
 void client_device_channel::setPositionCommandTopic(
     const char *positionCommandTopic) {
   this->positionCommandTopic = std::string(positionCommandTopic);
+}
+void client_device_channel::setPresetTemperatureCommandTopic(
+    const char *presetTemperatureCommandTopic) {
+  this->presetTemperatureCommandTopic =
+      std::string(presetTemperatureCommandTopic);
 }
 void client_device_channel::setStateTemplate(const char *stateTemplate) {
   this->stateTemplate = std::string(stateTemplate);
@@ -541,6 +1120,11 @@ void client_device_channel::setCommandTemplateOn(
 void client_device_channel::setCommandTemplateOff(
     const char *commandTemplateOff) {
   this->commandTemplateOff = std::string(commandTemplateOff);
+}
+void client_device_channel::setPresetTemperatureCommandTemplate(
+    const char *presetTemperatureCommandTemplate) {
+  this->presetTemperatureCommandTemplate =
+      std::string(presetTemperatureCommandTemplate);
 }
 void client_device_channel::setExecute(const char *execute) {
   this->execute = std::string(execute);
@@ -557,6 +1141,58 @@ void client_device_channel::setInvertState(bool invertState) {
 }
 void client_device_channel::setEsphomeCover(bool esphomeCover) {
   this->esphomeCover = esphomeCover;
+}
+void client_device_channel::setEsphomeRgbw(bool esphomeRgbw) {
+  this->esphomeRgbw = esphomeRgbw;
+}
+void client_device_channel::setHvacSubfunctionCool(bool hvacSubfunctionCool) {
+  this->hvacSubfunctionCool = hvacSubfunctionCool;
+}
+void client_device_channel::setHvacMainThermometerChannelNo(
+    unsigned char channelNo) {
+  this->hvacMainThermometerChannelNo = channelNo;
+}
+void client_device_channel::setGeneralValueDivider(_supla_int_t value) {
+  this->generalValueDivider = value;
+}
+void client_device_channel::setGeneralValueMultiplier(_supla_int_t value) {
+  this->generalValueMultiplier = value;
+}
+void client_device_channel::setGeneralValueAdded(_supla_int64_t value) {
+  this->generalValueAdded = value;
+}
+void client_device_channel::setGeneralValuePrecision(unsigned char value) {
+  this->generalValuePrecision = value > 4 ? 4 : value;
+}
+void client_device_channel::setGeneralUnitBeforeValue(const char *value) {
+  this->generalUnitBeforeValue = value == NULL ? "" : std::string(value);
+}
+void client_device_channel::setGeneralUnitAfterValue(const char *value) {
+  this->generalUnitAfterValue = value == NULL ? "" : std::string(value);
+}
+void client_device_channel::setGeneralNoSpaceBeforeValue(bool value) {
+  this->generalNoSpaceBeforeValue = value;
+}
+void client_device_channel::setGeneralNoSpaceAfterValue(bool value) {
+  this->generalNoSpaceAfterValue = value;
+}
+void client_device_channel::setGeneralKeepHistory(bool value) {
+  this->generalKeepHistory = value;
+}
+void client_device_channel::setGeneralChartType(unsigned char value) {
+  switch (value) {
+    case SUPLA_GENERAL_PURPOSE_MEASUREMENT_CHART_TYPE_BAR:
+    case SUPLA_GENERAL_PURPOSE_MEASUREMENT_CHART_TYPE_CANDLE:
+      this->generalChartType = value;
+      break;
+    default:
+      this->generalChartType =
+          SUPLA_GENERAL_PURPOSE_MEASUREMENT_CHART_TYPE_LINEAR;
+      break;
+  }
+}
+void client_device_channel::setGeneralRefreshIntervalMs(unsigned short value) {
+  this->generalRefreshIntervalMs = value;
 }
 void client_device_channel::setOnline(bool value) { this->online = value; }
 void client_device_channel::setLastSeconds(void) {
@@ -637,9 +1273,28 @@ void client_device_channels::getMqttSubscriptionTopics(
 
   for (i = 0; i < safe_array_count(arr); i++) {
     channel = (client_device_channel *)safe_array_get(arr, i);
-    if (channel->getStateTopic().length() > 0) {
-      vect->push_back(channel->getStateTopic());
+    push_topic_if_set(vect, channel->getStateTopic());
+    push_topic_if_set(vect, channel->getTemperatureTopic());
+    push_topic_if_set(vect, channel->getHumidityTopic());
+    for (unsigned char phase = 0; phase < 3; phase++) {
+      push_topic_if_set(vect, channel->getVoltageTopic(phase));
+      push_topic_if_set(vect, channel->getCurrentTopic(phase));
+      push_topic_if_set(vect, channel->getPowerTopic(phase));
+      push_topic_if_set(vect, channel->getEnergyTopic(phase));
+      push_topic_if_set(vect, channel->getReactivePowerTopic(phase));
+      push_topic_if_set(vect, channel->getApparentPowerTopic(phase));
+      push_topic_if_set(vect, channel->getPowerFactorTopic(phase));
+      push_topic_if_set(vect, channel->getPhaseAngleTopic(phase));
+      push_topic_if_set(vect, channel->getReturnedEnergyTopic(phase));
+      push_topic_if_set(vect, channel->getInductiveEnergyTopic(phase));
+      push_topic_if_set(vect, channel->getCapacitiveEnergyTopic(phase));
     }
+    push_topic_if_set(vect, channel->getFrequencyTopic());
+    push_topic_if_set(vect, channel->getBrightnessTopic());
+    push_topic_if_set(vect, channel->getColorBrightnessTopic());
+    push_topic_if_set(vect, channel->getColorTopic());
+    push_topic_if_set(vect, channel->getMeasuredTemperatureTopic());
+    push_topic_if_set(vect, channel->getPresetTemperatureTopic());
   }
 }
 int client_device_channels::getChannelCount(void) {
@@ -678,10 +1333,34 @@ void client_device_channels::get_channels_for_topic(
 
   for (i = 0; i < safe_array_count(arr); i++) {
     channel = (client_device_channel *)safe_array_get(arr, i);
-    std::string topic_str = channel->getStateTopic();
-
-    if (topic_str.length() > 0 && (topic_str.compare(topic) == 0)) {
+    if (topic_matches(channel->getStateTopic(), topic) ||
+        topic_matches(channel->getTemperatureTopic(), topic) ||
+        topic_matches(channel->getHumidityTopic(), topic) ||
+        topic_matches(channel->getFrequencyTopic(), topic) ||
+        topic_matches(channel->getBrightnessTopic(), topic) ||
+        topic_matches(channel->getColorBrightnessTopic(), topic) ||
+        topic_matches(channel->getColorTopic(), topic) ||
+        topic_matches(channel->getMeasuredTemperatureTopic(), topic) ||
+        topic_matches(channel->getPresetTemperatureTopic(), topic)) {
       vect->push_back(channel);
+      continue;
+    }
+
+    for (unsigned char phase = 0; phase < 3; phase++) {
+      if (topic_matches(channel->getVoltageTopic(phase), topic) ||
+          topic_matches(channel->getCurrentTopic(phase), topic) ||
+          topic_matches(channel->getPowerTopic(phase), topic) ||
+          topic_matches(channel->getEnergyTopic(phase), topic) ||
+          topic_matches(channel->getReactivePowerTopic(phase), topic) ||
+          topic_matches(channel->getApparentPowerTopic(phase), topic) ||
+          topic_matches(channel->getPowerFactorTopic(phase), topic) ||
+          topic_matches(channel->getPhaseAngleTopic(phase), topic) ||
+          topic_matches(channel->getReturnedEnergyTopic(phase), topic) ||
+          topic_matches(channel->getInductiveEnergyTopic(phase), topic) ||
+          topic_matches(channel->getCapacitiveEnergyTopic(phase), topic)) {
+        vect->push_back(channel);
+        break;
+      }
     }
   };
 }
@@ -694,10 +1373,32 @@ client_device_channel *client_device_channels::find_channel_by_topic(
 
   for (i = 0; i < safe_array_count(arr); i++) {
     channel = (client_device_channel *)safe_array_get(arr, i);
-    std::string topic_str = channel->getStateTopic();
-
-    if (topic_str.length() > 0 && (topic_str.compare(topic) == 0)) {
+    if (topic_matches(channel->getStateTopic(), topic) ||
+        topic_matches(channel->getTemperatureTopic(), topic) ||
+        topic_matches(channel->getHumidityTopic(), topic) ||
+        topic_matches(channel->getFrequencyTopic(), topic) ||
+        topic_matches(channel->getBrightnessTopic(), topic) ||
+        topic_matches(channel->getColorBrightnessTopic(), topic) ||
+        topic_matches(channel->getColorTopic(), topic) ||
+        topic_matches(channel->getMeasuredTemperatureTopic(), topic) ||
+        topic_matches(channel->getPresetTemperatureTopic(), topic)) {
       return channel;
+    }
+
+    for (unsigned char phase = 0; phase < 3; phase++) {
+      if (topic_matches(channel->getVoltageTopic(phase), topic) ||
+          topic_matches(channel->getCurrentTopic(phase), topic) ||
+          topic_matches(channel->getPowerTopic(phase), topic) ||
+          topic_matches(channel->getEnergyTopic(phase), topic) ||
+          topic_matches(channel->getReactivePowerTopic(phase), topic) ||
+          topic_matches(channel->getApparentPowerTopic(phase), topic) ||
+          topic_matches(channel->getPowerFactorTopic(phase), topic) ||
+          topic_matches(channel->getPhaseAngleTopic(phase), topic) ||
+          topic_matches(channel->getReturnedEnergyTopic(phase), topic) ||
+          topic_matches(channel->getInductiveEnergyTopic(phase), topic) ||
+          topic_matches(channel->getCapacitiveEnergyTopic(phase), topic)) {
+        return channel;
+      }
     }
   };
 
