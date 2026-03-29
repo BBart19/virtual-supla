@@ -1,12 +1,24 @@
 [GLOBAL]
-device_name=SUPLA VIRTUAL DEVICE SHUTTER
-
+# common global options
+device_name=SUPLA VIRTUAL DEVICE
+device_guid_file=./var/dev_guid
+state_file=./var/last_state.txt
+# alt_cfg=./supla-virtual-device.extra.cfg
 
 [SERVER]
 host=svrX.supla.org
-protocol_version=12
+protocol_version=21
+tcp_port=2015
+ssl_port=2016
+ssl_enabled=1
+
+[LOCATION]
+# legacy registration mode
+# ID=0
+# PASSWORD=
 
 [AUTH]
+# cloud registration mode
 email=you@example.com
 
 [MQTT]
@@ -14,7 +26,210 @@ host=192.168.1.100
 port=1883
 username=mqtt-user
 password=mqtt-password
-client_name=supla-virtual-device-shutter
+client_name=supla-virtual-device
+
+# ------------------------------------------------------------------
+# supported function names:
+#
+# TEMPERATURE
+# HUMIDITY
+# TEMPERATURE_AND_HUMIDITY
+# GENERAL
+# WINDSENSOR
+# PRESSURESENSOR
+# RAINSENSOR
+# WEIGHTSENSOR
+# DISTANCESENSOR
+# DEPTHSENSOR
+# POWERSWITCH
+# LIGHTSWITCH
+# STAIRCASETIMER
+# GATEWAYLOCK
+# GATE
+# GARAGEDOOR
+# DOORLOCK
+# GATEWAYSENSOR
+# GATESENSOR
+# GARAGE_DOOR_SENSOR
+# DOORLOCKSENSOR
+# NOLIQUID
+# WINDOWSENSOR
+# MAILSENSOR
+# ROLLERSHUTTER
+# ROLLERSHUTTERSENSOR
+# DIMMER
+# RGBLIGHTNING / RGBLIGHTING
+# DIMMERANDRGB
+# IC_ELECTRICITY_METER
+# IC_GAS_METER
+# IC_WATER_METER
+# ELECTRICITY_METER
+# VALVE_OPENCLOSE
+# THERMOSTAT
+# THERMOSTAT_HEATPOL_HOMEPLUS / THERMOSTAT_HEATPOL / THERMOSTAT_HEATPOOL
+# HVAC_THERMOSTAT
+#
+# supported channel type names:
+#
+# SENSORNO
+# SENSORNC
+# RELAYHFD4
+# RELAYG5LA1A
+# 2XRELAYG5LA1A
+# RELAY
+# THERMOMETERDS18B20
+# DHT11
+# DHT22
+# AM2302
+# DIMMER
+# RGBLEDCONTROLLER
+# DIMMERANDRGBLED
+# HUMIDITYSENSOR
+# VALVE
+# THERMOSTAT
+# HVAC
+# THERMOSTAT_HEATPOL_HOMEPLUS / THERMOSTAT_HEATPOL / THERMOSTAT_HEATPOOL
+#
+# supported common per-channel keys:
+#
+# type=
+# function=
+# file=
+# state_topic=
+# command_topic=
+# payload_on=
+# payload_off=
+# payload_value=
+# command=
+# command_on=
+# command_off=
+# min_interval_sec=
+# min_toggle_sec=
+# file_write_check_sec=
+# retain=0/1
+# invert_state=0/1
+# battery_powered=0/1
+# state_tamplate=        ; yes, parser currently expects this exact typo
+# command_template=
+# command_template_on=
+# command_template_off=
+# id_Template=
+# id_Value=
+#
+# extra keys by feature:
+#
+# TEMPERATURE_AND_HUMIDITY:
+# temperature_topic=
+# humidity_topic=
+#
+# DIMMER / RGB / DIMMERANDRGB:
+# brightness_topic=
+# color_brightness_topic=
+# color_topic=
+# esphome_rgbw=0/1
+# supported placeholders in command_template:
+# $value$
+# $state$
+# $on_off$
+# $brightness$
+# $brightness_255$
+# $color_brightness$
+# $color_brightness_255$
+# $red$
+# $green$
+# $blue$
+# $color$      ; 0xRRGGBB
+# $hex_color$  ; #RRGGBB
+#
+# ROLLERSHUTTER:
+# position_command_topic=
+# esphome_cover=0/1
+#
+# THERMOSTAT_HEATPOL_HOMEPLUS:
+# measured_temperature_topic=
+# preset_temperature_topic=
+# preset_temperature_command_topic=
+# preset_temperature_command_template=
+#
+# HVAC_THERMOSTAT:
+# hvac_subfunction=heat|cool
+# main_thermometer_channel_no=
+# preset_temperature_topic=
+# preset_temperature_command_topic=
+# preset_temperature_command_template=
+#
+# GENERAL:
+# value_divider=
+# value_multiplier=
+# value_added=
+# value_precision=
+# unit_before_value=
+# unit_after_value=
+# no_space_before_value=0/1
+# no_space_after_value=0/1
+# keep_history=0/1
+# chart_type=linear|bar|candle
+# refresh_interval_ms=
+#
+# ELECTRICITY_METER 1-phase:
+# frequency_topic=
+# voltage_topic=
+# current_topic=
+# power_topic=
+# energy_topic=
+#
+# ELECTRICITY_METER 3-phase:
+# voltage_topic_l1/l2/l3=
+# current_topic_l1/l2/l3=
+# power_topic_l1/l2/l3=
+# energy_topic_l1/l2/l3=
+# reactive_power_topic_l1/l2/l3=
+# apparent_power_topic_l1/l2/l3=
+# power_factor_topic_l1/l2/l3=
+# phase_angle_topic_l1/l2/l3=
+# returned_energy_topic_l1/l2/l3=
+# inductive_energy_topic_l1/l2/l3=
+# capacitive_energy_topic_l1/l2/l3=
+#
+# accepted electricity aliases:
+# state_voltage, state_voltage_topic, voltage_topic
+# state_current, state_current_topic, current_topic
+# state_power, state_power_topic, power_topic
+# state_energy, state_energy_topic, energy_topic
+# state_frequency, state_frequency_topic, frequency_topic
+# power_reactive_topic_lX
+# power_apparent_topic_lX
+# reverse_active_energy_topic_lX
+# forward_reactive_energy_topic_lX
+# reverse_reactive_energy_topic_lX
+# ------------------------------------------------------------------
+
+# generic template with almost all possible keys
+#
+#[CHANNEL_0]
+#type=
+#function=
+#file=
+#state_topic=
+#command_topic=
+#payload_on=
+#payload_off=
+#payload_value=
+#command=
+#command_on=
+#command_off=
+#min_interval_sec=10
+#min_toggle_sec=0
+#file_write_check_sec=0
+#retain=1
+#invert_state=0
+#battery_powered=0
+#state_tamplate=
+#command_template=
+#command_template_on=
+#command_template_off=
+#id_Template=
+#id_Value=
 
 [CHANNEL_0]
 function=TEMPERATURE_AND_HUMIDITY
@@ -25,58 +240,170 @@ function=TEMPERATURE
 file=/home/pi/supla-filesensors/var/raspberry_sdcard_free.txt
 min_interval_sec=300
 
-# example of getting payload switch 0/1 value
-
+# switch with raw payload 0/1
 [CHANNEL_2]
 function=POWERSWITCH
 state_topic=relays/switch/0/state
 command_topic=relays/switch/0/command
 command_template=$value$
 payload_on=1
-payload_off=1
+payload_off=0
+retain=0
 
-# example of getting payload dot separated temp and humidity value
-# example 25.4 78
-
+# temperature and humidity in one payload, e.g. "25.4 78"
 [CHANNEL_3]
 function=TEMPERATURE_AND_HUMIDITY
 state_topic=sensors/temphum/0/state
+# payload_value=
+# id_Template=
+# id_Value=
 
-[CHANNEL_31]
+[CHANNEL_4]
+function=LIGHTSWITCH
+state_topic=relays/lightbulb/1/state
+command_topic=relays/lightbulb/1/command
+payload_value=/on
+payload_on=true
+payload_off=false
+
+[CHANNEL_5]
+function=WINDSENSOR
+state_topic=sensors/wind/0/state
+
+[CHANNEL_6]
+function=ROLLERSHUTTER
+state_topic=esphome/device/cover/shutter/position/state
+invert_state=1
+retain=0
+esphome_cover=1
+command_topic=esphome/device/cover/shutter/command
+position_command_topic=esphome/device/cover/shutter/position/command
+# command_template=$value$
+
+[CHANNEL_7]
+function=THERMOSTAT_HEATPOL_HOMEPLUS
+state_topic=esphome/device/climate/room/mode/state
+payload_on=heat
+payload_off=off
+command_topic=esphome/device/climate/room/mode/command
+command_template_on=heat
+command_template_off=off
+measured_temperature_topic=esphome/device/climate/room/current_temperature/state
+preset_temperature_topic=esphome/device/climate/room/target_temperature/state
+preset_temperature_command_topic=esphome/device/climate/room/target_temperature/command
+preset_temperature_command_template=$value$
+
+[CHANNEL_8]
+function=HVAC_THERMOSTAT
+hvac_subfunction=heat
+main_thermometer_channel_no=9
+state_topic=esphome/device/climate/room/mode/state
+payload_on=heat
+payload_off=off
+command_topic=esphome/device/climate/room/mode/command
+command_template_on=heat
+command_template_off=off
+preset_temperature_topic=esphome/device/climate/room/target_temperature/state
+preset_temperature_command_topic=esphome/device/climate/room/target_temperature/command
+preset_temperature_command_template=$value$
+
+[CHANNEL_9]
+function=TEMPERATURE
+state_topic=esphome/device/climate/room/current_temperature/state
+
+[CHANNEL_10]
+function=GENERAL
+state_topic=sensors/general/0/state
+value_divider=1
+value_multiplier=1
+value_added=0
+value_precision=1
+unit_before_value=
+unit_after_value=ppm
+no_space_before_value=0
+no_space_after_value=0
+keep_history=1
+chart_type=linear
+refresh_interval_ms=0
+
+[CHANNEL_11]
 function=HUMIDITY
 state_topic=sensors/humidity/0/state
 
-[CHANNEL_32]
-function=GENERAL
-state_topic=sensors/general/0/state
-value_precision=1
-unit_after_value=ppm
-keep_history=1
-chart_type=linear
+[CHANNEL_12]
+function=DIMMER
+state_topic=lights/dimmer/0/state
+brightness_topic=lights/dimmer/0/brightness/state
+command_topic=lights/dimmer/0/command
+command_template={"state":"$state$","brightness":$brightness$}
+payload_on=ON
+payload_off=OFF
+retain=0
 
-[CHANNEL_34]
+[CHANNEL_13]
+function=RGBLIGHTNING
+state_topic=lights/rgb/0/state
+color_brightness_topic=lights/rgb/0/color_brightness/state
+color_topic=lights/rgb/0/color/state
+command_topic=lights/rgb/0/command
+command_template={"state":"$state$","color_brightness":$color_brightness$,"color":"$hex_color$"}
+payload_on=ON
+payload_off=OFF
+retain=0
+
+[CHANNEL_14]
+function=DIMMERANDRGB
+state_topic=lights/rgbw/0/state
+brightness_topic=lights/rgbw/0/brightness/state
+color_brightness_topic=lights/rgbw/0/color_brightness/state
+color_topic=lights/rgbw/0/color/state
+command_topic=lights/rgbw/0/command
+command_template={"state":"$state$","brightness":$brightness$,"color_brightness":$color_brightness$,"color":"$hex_color$","r":$red$,"g":$green$,"b":$blue$}
+payload_on=ON
+payload_off=OFF
+retain=0
+# esphome_rgbw=1
+
+[CHANNEL_15]
 function=IC_ELECTRICITY_METER
 state_topic=meters/energy/main/state
 # simplest payload example: 123.456
-# JSON is also supported, e.g.
+# JSON is also supported:
 # {"counter":123456,"impulses_per_unit":1000,"unit":"kWh","price_per_unit":0.89,"currency":"PLN"}
 
-[CHANNEL_35]
+[CHANNEL_16]
 function=ELECTRICITY_METER
 state_topic=meters/energy/phase1/state
 # simplest payload example: 123.456
 # richer 1-phase JSON example:
 # {"total_kwh":123.456,"power_w":56.7,"voltage_v":229.8,"current_a":0.31,"frequency_hz":50.0}
+# optional JSON keys:
+# total_reverse_active_energy_kwh
+# total_forward_reactive_energy_kvarh
+# total_reverse_reactive_energy_kvarh
+# power_reactive_var
+# power_apparent_va
+# power_factor
+# phase_angle_deg
+# period_sec
 
-[CHANNEL_36]
+[CHANNEL_17]
 function=ELECTRICITY_METER
 energy_topic=meters/energy/phase1/total_kwh/state
 power_topic=meters/energy/phase1/power_w/state
 voltage_topic=meters/energy/phase1/voltage_v/state
 current_topic=meters/energy/phase1/current_a/state
 frequency_topic=meters/energy/phase1/frequency_hz/state
+# optional extras:
+# reactive_power_topic=meters/energy/phase1/reactive_power_var/state
+# apparent_power_topic=meters/energy/phase1/apparent_power_va/state
+# power_factor_topic=meters/energy/phase1/power_factor/state
+# phase_angle_topic=meters/energy/phase1/phase_angle_deg/state
+# returned_energy_topic=meters/energy/phase1/returned_kwh/state
+# inductive_energy_topic=meters/energy/phase1/inductive_kvarh/state
+# capacitive_energy_topic=meters/energy/phase1/capacitive_kvarh/state
 
-[CHANNEL_37]
+[CHANNEL_18]
 function=ELECTRICITY_METER
 energy_topic_l1=meters/energy/l1/total_kwh/state
 energy_topic_l2=meters/energy/l2/total_kwh/state
@@ -114,95 +441,167 @@ frequency_topic=meters/energy/frequency_hz/state
 # capacitive_energy_topic_l2=meters/energy/l2/capacitive_kvarh/state
 # capacitive_energy_topic_l3=meters/energy/l3/capacitive_kvarh/state
 
-# example of getting temperature and humidity from two separate MQTT topics
+[CHANNEL_19]
+function=IC_GAS_METER
+state_topic=meters/gas/main/state
+
+[CHANNEL_20]
+function=IC_WATER_METER
+state_topic=meters/water/main/state
+
+[CHANNEL_21]
+function=VALVE_OPENCLOSE
+state_topic=valves/main/state
+command_topic=valves/main/command
+payload_on=OPEN
+payload_off=CLOSE
+command_template=$value$
+
+[CHANNEL_22]
+function=LIGHTSWITCH
+state_topic=relays/jsonswitch/state
+command_topic=relays/jsonswitch/command
+payload_value=/state
+payload_on=ON
+payload_off=OFF
+state_tamplate={"state":"$value$"}
+command_template={"state":"$value$"}
+id_Template=/id
+id_Value=kitchen-switch
+
+[CHANNEL_23]
+function=PRESSURESENSOR
+state_topic=sensors/pressure/0/state
+
+[CHANNEL_24]
+function=RAINSENSOR
+state_topic=sensors/rain/0/state
+
+[CHANNEL_25]
+function=WEIGHTSENSOR
+state_topic=sensors/weight/0/state
+
+[CHANNEL_26]
+function=DISTANCESENSOR
+state_topic=sensors/distance/0/state
+
+[CHANNEL_27]
+function=DEPTHSENSOR
+state_topic=sensors/depth/0/state
+
+[CHANNEL_28]
+function=WINDOWSENSOR
+state_topic=sensors/window/0/state
+payload_on=OPEN
+payload_off=CLOSED
+
+[CHANNEL_29]
+function=MAILSENSOR
+state_topic=sensors/mailbox/0/state
+payload_on=1
+payload_off=0
+
+[CHANNEL_30]
+function=GATESENSOR
+state_topic=sensors/gate/0/state
+payload_on=OPEN
+payload_off=CLOSED
+
+[CHANNEL_31]
+function=GATEWAYSENSOR
+state_topic=sensors/gateway/0/state
+payload_on=OPEN
+payload_off=CLOSED
+
+[CHANNEL_32]
+function=GARAGE_DOOR_SENSOR
+state_topic=sensors/garage_door/0/state
+payload_on=OPEN
+payload_off=CLOSED
 
 [CHANNEL_33]
-function=TEMPERATURE_AND_HUMIDITY
-temperature_topic=sensors/temphum/0/temperature/state
-humidity_topic=sensors/temphum/0/humidity/state
+function=DOORLOCKSENSOR
+state_topic=sensors/doorlock/0/state
+payload_on=OPEN
+payload_off=CLOSED
 
-# example of parsing json payload { "on": true }
+[CHANNEL_34]
+function=ROLLERSHUTTERSENSOR
+state_topic=sensors/roller_contact/0/state
+payload_on=OPEN
+payload_off=CLOSED
 
-[CHANNEL_4]
-function=LIGHTSWITCH
-state_topic=relays/lightbulb/1/state
-command_topic=relays/lightbulb/1/command
-payload_value=/on
-payload_on=true
-payload_off=false
+[CHANNEL_35]
+function=NOLIQUID
+state_topic=sensors/no_liquid/0/state
+payload_on=DRY
+payload_off=WET
 
-[CHANNEL_5]
-function=WINDSENSOR
-state_topic=sensors/wind/0/state
+[CHANNEL_36]
+function=GATE
+state_topic=actuators/gate/0/state
+command_topic=actuators/gate/0/command
+payload_on=OPEN
+payload_off=CLOSE
+command_template=$value$
 
-[CHANNEL_51]
-function=DIMMER
-state_topic=lights/dimmer/0/state
-brightness_topic=lights/dimmer/0/brightness/state
-command_topic=lights/dimmer/0/command
-command_template={"state":"$state$","brightness":$brightness$}
-payload_on=ON
-payload_off=OFF
+[CHANNEL_37]
+function=GATEWAYLOCK
+state_topic=actuators/gatewaylock/0/state
+command_topic=actuators/gatewaylock/0/command
+payload_on=OPEN
+payload_off=CLOSE
+command_template=$value$
 
-[CHANNEL_52]
-function=RGBLIGHTNING
-state_topic=lights/rgb/0/state
-color_brightness_topic=lights/rgb/0/color_brightness/state
-color_topic=lights/rgb/0/color/state
-command_topic=lights/rgb/0/command
-command_template={"state":"$state$","color_brightness":$color_brightness$,"color":"$hex_color$"}
-payload_on=ON
-payload_off=OFF
+[CHANNEL_38]
+function=GARAGEDOOR
+state_topic=actuators/garage_door/0/state
+command_topic=actuators/garage_door/0/command
+payload_on=OPEN
+payload_off=CLOSE
+command_template=$value$
 
-[CHANNEL_53]
-function=DIMMERANDRGB
-state_topic=lights/rgbw/0/state
-brightness_topic=lights/rgbw/0/brightness/state
-color_brightness_topic=lights/rgbw/0/color_brightness/state
-color_topic=lights/rgbw/0/color/state
-command_topic=lights/rgbw/0/command
-command_template={"state":"$state$","brightness":$brightness$,"color_brightness":$color_brightness$,"color":"$hex_color$","r":$red$,"g":$green$,"b":$blue$}
-payload_on=ON
-payload_off=OFF
+[CHANNEL_39]
+function=DOORLOCK
+state_topic=actuators/doorlock/0/state
+command_topic=actuators/doorlock/0/command
+payload_on=OPEN
+payload_off=CLOSE
+command_template=$value$
 
-[CHANNEL_6]
-function=ROLLERSHUTTER
-state_topic=esphome/device/cover/shutter/position/state
-invert_state=1
-retain=0
-esphome_cover=1
-command_topic=esphome/device/cover/shutter/command
-position_command_topic=esphome/device/cover/shutter/position/command
+[CHANNEL_40]
+function=STAIRCASETIMER
+state_topic=relays/staircase/0/state
+command_topic=relays/staircase/0/command
+payload_on=1
+payload_off=0
+command_template=$value$
+min_toggle_sec=60
 
-[CHANNEL_7]
-function=THERMOSTAT_HEATPOL_HOMEPLUS
-state_topic=esphome/device/climate/room/mode/state
-payload_on=heat
-payload_off=off
-command_topic=esphome/device/climate/room/mode/command
-command_template_on=heat
-command_template_off=off
-measured_temperature_topic=esphome/device/climate/room/current_temperature/state
-preset_temperature_topic=esphome/device/climate/room/target_temperature/state
-preset_temperature_command_topic=esphome/device/climate/room/target_temperature/command
+[CHANNEL_41]
+function=THERMOSTAT
+state_topic=legacy/thermostat/mode/state
+payload_on=1
+payload_off=0
+command_topic=legacy/thermostat/mode/command
+command_template=$value$
+measured_temperature_topic=legacy/thermostat/current_temperature/state
+preset_temperature_topic=legacy/thermostat/target_temperature/state
+preset_temperature_command_topic=legacy/thermostat/target_temperature/command
 preset_temperature_command_template=$value$
 
-[CHANNEL_8]
-function=HVAC_THERMOSTAT
-hvac_subfunction=heat
-main_thermometer_channel_no=9
-state_topic=esphome/device/climate/room/mode/state
-payload_on=heat
-payload_off=off
-command_topic=esphome/device/climate/room/mode/command
-command_template_on=heat
-command_template_off=off
-preset_temperature_topic=esphome/device/climate/room/target_temperature/state
-preset_temperature_command_topic=esphome/device/climate/room/target_temperature/command
-preset_temperature_command_template=$value$
-
-[CHANNEL_9]
-function=TEMPERATURE
-state_topic=esphome/device/climate/room/current_temperature/state
+# file-based examples for legacy/simple integrations:
+#
+#[CHANNEL_50]
+#function=ROLLERSHUTTER
+#file=/tmp/roller.txt
+#
+#[CHANNEL_51]
+#function=THERMOSTAT_HEATPOL_HOMEPLUS
+#file=/tmp/thermostat.txt
+#
+#[CHANNEL_52]
+#function=ELECTRICITY_METER
+#file=/tmp/electricity.json
 
 # this is a comment
