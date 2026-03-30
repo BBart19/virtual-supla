@@ -146,6 +146,15 @@ bool publish_esphome_cover_message_for_channel(client_device_channel *channel) {
 }
 
 std::string get_hvac_on_mode_name(client_device_channel *channel) {
+  if (channel != NULL && channel->getFunction() == SUPLA_CHANNELFNC_HVAC_FAN) {
+    return "fan_only";
+  }
+
+  if (channel != NULL &&
+      channel->getFunction() == SUPLA_CHANNELFNC_HVAC_THERMOSTAT_DIFFERENTIAL) {
+    return "heat_cool";
+  }
+
   if (channel != NULL && channel->getHvacSubfunctionCool()) {
     return "cool";
   }
@@ -153,10 +162,31 @@ std::string get_hvac_on_mode_name(client_device_channel *channel) {
   return "heat";
 }
 
-std::string build_hvac_mode_payload(client_device_channel *channel, bool isOn) {
+std::string get_hvac_mode_name(unsigned char mode,
+                               client_device_channel *channel) {
+  switch (mode) {
+    case SUPLA_HVAC_MODE_OFF:
+      return "off";
+    case SUPLA_HVAC_MODE_HEAT:
+      return "heat";
+    case SUPLA_HVAC_MODE_COOL:
+      return "cool";
+    case SUPLA_HVAC_MODE_HEAT_COOL:
+      return "heat_cool";
+    case SUPLA_HVAC_MODE_FAN_ONLY:
+      return "fan_only";
+    default:
+      return channel != NULL ? get_hvac_on_mode_name(channel) : "heat";
+  }
+}
+
+std::string build_hvac_mode_payload(client_device_channel *channel, bool isOn,
+                                    const std::string &forcedModeName = "") {
   std::string payload =
       isOn ? channel->getCommandTemplateOn() : channel->getCommandTemplateOff();
-  std::string modeName = isOn ? get_hvac_on_mode_name(channel) : "off";
+  std::string modeName = forcedModeName.length() > 0
+                             ? forcedModeName
+                             : (isOn ? get_hvac_on_mode_name(channel) : "off");
 
   if (payload.length() == 0) {
     payload = channel->getCommandTemplate();
@@ -185,6 +215,10 @@ double get_hvac_publish_temperature(client_device_channel *channel,
                                     bool *available) {
   if (available != NULL) {
     *available = false;
+  }
+
+  if (channel != NULL && channel->getFunction() == SUPLA_CHANNELFNC_HVAC_FAN) {
+    return 0;
   }
 
   bool useCool = channel != NULL && channel->getHvacSubfunctionCool();
@@ -218,6 +252,72 @@ bool publish_hvac_thermostat_messages_for_channel(client_device_channel *channel
   THVACValue hvacValue;
   if (!channel->getHvac(&hvacValue)) return false;
 
+  if (channel->getFunction() == SUPLA_CHANNELFNC_HVAC_THERMOSTAT_DIFFERENTIAL) {
+    bool published = false;
+
+    if (channel->getCommandTopic().length() > 0) {
+      switch (hvacValue.Mode) {
+        case SUPLA_HVAC_MODE_OFF:
+          publish_to_mqtt_topic(channel->getCommandTopic(),
+                                build_hvac_mode_payload(
+                                    channel, false,
+                                    get_hvac_mode_name(hvacValue.Mode, channel)),
+                                channel->getRetain());
+          published = true;
+          break;
+        case SUPLA_HVAC_MODE_HEAT:
+        case SUPLA_HVAC_MODE_COOL:
+        case SUPLA_HVAC_MODE_HEAT_COOL:
+        case SUPLA_HVAC_MODE_CMD_TURN_ON:
+          publish_to_mqtt_topic(
+              channel->getCommandTopic(),
+              build_hvac_mode_payload(
+                  channel, true,
+                  get_hvac_mode_name(
+                      hvacValue.Mode == SUPLA_HVAC_MODE_CMD_TURN_ON
+                          ? SUPLA_HVAC_MODE_HEAT_COOL
+                          : hvacValue.Mode,
+                      channel)),
+              channel->getRetain());
+          published = true;
+          break;
+      }
+    }
+
+    auto publishTemperature = [channel](const std::string &topic,
+                                        const std::string &payloadTemplate,
+                                        unsigned char index,
+                                        double temperature) -> bool {
+      if (topic.length() == 0) return false;
+
+      std::string payload = payloadTemplate.length() == 0 ? "$value$"
+                                                          : payloadTemplate;
+      replace_string_in_place(&payload, "$index$", std::to_string(index));
+      replace_string_in_place(&payload, "$value$",
+                              format_decimal_value(temperature));
+      replace_string_in_place(&payload, "$temperature$",
+                              format_decimal_value(temperature));
+      publish_to_mqtt_topic(topic, payload, channel->getRetain());
+      return true;
+    };
+
+    if ((hvacValue.Flags & SUPLA_HVAC_VALUE_FLAG_SETPOINT_TEMP_HEAT_SET) != 0 &&
+        publishTemperature(channel->getPresetTemperatureCommandTopic(),
+                           channel->getPresetTemperatureCommandTemplate(), 0,
+                           hvacValue.SetpointTemperatureHeat / 100.0)) {
+      published = true;
+    }
+
+    if ((hvacValue.Flags & SUPLA_HVAC_VALUE_FLAG_SETPOINT_TEMP_COOL_SET) != 0 &&
+        publishTemperature(channel->getPresetTemperatureHighCommandTopic(),
+                           channel->getPresetTemperatureHighCommandTemplate(), 1,
+                           hvacValue.SetpointTemperatureCool / 100.0)) {
+      published = true;
+    }
+
+    return published;
+  }
+
   bool published = false;
 
   if (channel->getCommandTopic().length() > 0) {
@@ -230,6 +330,7 @@ bool publish_hvac_thermostat_messages_for_channel(client_device_channel *channel
         break;
       case SUPLA_HVAC_MODE_HEAT:
       case SUPLA_HVAC_MODE_COOL:
+      case SUPLA_HVAC_MODE_FAN_ONLY:
       case SUPLA_HVAC_MODE_CMD_TURN_ON:
         publish_to_mqtt_topic(channel->getCommandTopic(),
                               build_hvac_mode_payload(channel, true),
@@ -446,7 +547,16 @@ void publish_mqtt_message_for_channel(client_device_channel* channel) {
       channel->getValue(value);
       bool hi = value[0] > 0;
 
+      if (hi && payloadOn.length() > 0) {
+        payload = payloadOn;
+      } else if (payloadOff.length() > 0) {
+        payload = payloadOff;
+      }
       replace_string_in_place(&payload, "$value$", std::to_string(hi));
+      replace_string_in_place(&payload, "$state$",
+                              get_channel_state_payload(channel, hi));
+      replace_string_in_place(&payload, "$on_off$",
+                              std::to_string(hi ? 1 : 0));
       publish = true;
     } break;
     case SUPLA_CHANNELFNC_OPENINGSENSOR_GATEWAY:
@@ -456,10 +566,7 @@ void publish_mqtt_message_for_channel(client_device_channel* channel) {
     case SUPLA_CHANNELFNC_OPENINGSENSOR_ROLLERSHUTTER:
     case SUPLA_CHANNELFNC_OPENINGSENSOR_WINDOW:
     case SUPLA_CHANNELFNC_MAILSENSOR:
-    case SUPLA_CHANNELFNC_NOLIQUIDSENSOR:
-    case SUPLA_CHANNELFNC_POWERSWITCH:
-    case SUPLA_CHANNELFNC_LIGHTSWITCH:
-    case SUPLA_CHANNELFNC_STAIRCASETIMER: {
+    case SUPLA_CHANNELFNC_NOLIQUIDSENSOR: {
       char cv[SUPLA_CHANNELVALUE_SIZE];
       channel->getValue(cv);
       bool hi = cv[0] > 0;
@@ -473,7 +580,26 @@ void publish_mqtt_message_for_channel(client_device_channel* channel) {
 
       publish = true;
     } break;
-    case SUPLA_CHANNELFNC_CONTROLLINGTHEROLLERSHUTTER: {
+    case SUPLA_CHANNELFNC_POWERSWITCH:
+    case SUPLA_CHANNELFNC_LIGHTSWITCH:
+    case SUPLA_CHANNELFNC_STAIRCASETIMER:
+    case SUPLA_CHANNELFNC_PUMPSWITCH:
+    case SUPLA_CHANNELFNC_HEATORCOLDSOURCESWITCH: {
+      char cv[SUPLA_CHANNELVALUE_SIZE];
+      channel->getValue(cv);
+      bool hi = cv[0] > 0;
+
+      if (hi && payloadOn.length() > 0) {
+        payload = payloadOn;
+      } else if (payloadOff.length() > 0) {
+        payload = payloadOff;
+      }
+      replace_string_in_place(&payload, "$value$", std::to_string(hi));
+
+      publish = true;
+    } break;
+    case SUPLA_CHANNELFNC_CONTROLLINGTHEROLLERSHUTTER:
+    case SUPLA_CHANNELFNC_CONTROLLINGTHEFACADEBLIND: {
       if (channel->getEsphomeCover()) {
         publishedInternally = publish_esphome_cover_message_for_channel(channel);
         break;
@@ -502,7 +628,9 @@ void publish_mqtt_message_for_channel(client_device_channel* channel) {
             channel, thermostatValue.IsOn);
       }
     } break;
+    case SUPLA_CHANNELFNC_HVAC_FAN:
     case SUPLA_CHANNELFNC_HVAC_THERMOSTAT:
+    case SUPLA_CHANNELFNC_HVAC_THERMOSTAT_DIFFERENTIAL:
       publishedInternally = publish_hvac_thermostat_messages_for_channel(channel);
       break;
     case SUPLA_CHANNELFNC_DIMMER:

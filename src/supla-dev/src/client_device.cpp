@@ -30,7 +30,13 @@ bool is_thermostat_function(int function) {
 }
 
 bool is_hvac_thermostat_function(int function) {
-  return function == SUPLA_CHANNELFNC_HVAC_THERMOSTAT;
+  return function == SUPLA_CHANNELFNC_HVAC_THERMOSTAT ||
+         function == SUPLA_CHANNELFNC_HVAC_THERMOSTAT_DIFFERENTIAL;
+}
+
+bool is_hvac_channel_function(int function) {
+  return is_hvac_thermostat_function(function) ||
+         function == SUPLA_CHANNELFNC_HVAC_FAN;
 }
 
 _supla_int16_t thermostat_temperature_to_raw(double temperature) {
@@ -103,13 +109,17 @@ client_device_channel::client_device_channel(int number) {
   this->colorTopic = "";
   this->measuredTemperatureTopic = "";
   this->presetTemperatureTopic = "";
+  this->presetTemperatureHighTopic = "";
+  this->actionTopic = "";
   this->positionCommandTopic = "";
   this->presetTemperatureCommandTopic = "";
+  this->presetTemperatureHighCommandTopic = "";
   this->stateTemplate = "";
   this->commandTemplate = "";
   this->commandTemplateOn = "";
   this->commandTemplateOff = "";
   this->presetTemperatureCommandTemplate = "";
+  this->presetTemperatureHighCommandTemplate = "";
   this->execute = "";
   this->executeOn = "";
   this->executeOff = "";
@@ -122,9 +132,11 @@ client_device_channel::client_device_channel(int number) {
   this->esphomeCover = false;
   this->esphomeRgbw = false;
   this->hvacSubfunctionCool = false;
+  this->hvacReportAsThermostat = false;
   this->generalNoSpaceBeforeValue = false;
   this->generalNoSpaceAfterValue = false;
   this->generalKeepHistory = false;
+  this->hvacConfigInitialized = false;
   this->hvacMainThermometerChannelNo = 0;
   this->generalValuePrecision = 2;
   this->generalChartType =
@@ -143,6 +155,7 @@ client_device_channel::client_device_channel(int number) {
   this->last = (struct timeval){0};
   memset(this->value, 0, sizeof(this->value));
   this->extendedValue = NULL;
+  memset(&this->hvacConfig, 0, sizeof(this->hvacConfig));
 
   this->lck = lck_init();
 }
@@ -177,6 +190,10 @@ void client_device_channel::setToggleSec(int interval) {
 
 bool client_device_channel::isBatteryPowered(void) {
   return this->batteryPowered;
+}
+
+bool client_device_channel::getHvacReportAsThermostat(void) {
+  return this->hvacReportAsThermostat;
 }
 
 unsigned char client_device_channel::getBatteryLevel(void) {
@@ -216,6 +233,8 @@ void client_device_channel::toggleValue(void) {
     case SUPLA_CHANNELFNC_POWERSWITCH:
     case SUPLA_CHANNELFNC_LIGHTSWITCH:
     case SUPLA_CHANNELFNC_STAIRCASETIMER:
+    case SUPLA_CHANNELFNC_PUMPSWITCH:
+    case SUPLA_CHANNELFNC_HEATORCOLDSOURCESWITCH:
     case SUPLA_CHANNELFNC_CONTROLLINGTHEDOORLOCK:
     case SUPLA_CHANNELFNC_CONTROLLINGTHEGARAGEDOOR:
     case SUPLA_CHANNELFNC_CONTROLLINGTHEGATEWAYLOCK:
@@ -265,7 +284,6 @@ void client_device_channel::getDouble(double *result) {
     case SUPLA_CHANNELFNC_OPENINGSENSOR_ROLLERSHUTTER:
     case SUPLA_CHANNELFNC_OPENINGSENSOR_WINDOW:
     case SUPLA_CHANNELFNC_MAILSENSOR:
-    case SUPLA_CHANNELFNC_VALVE_OPENCLOSE:
       *result = this->value[0] > 0 ? 1 : 0;
       break;
     case SUPLA_CHANNELFNC_THERMOMETER:
@@ -464,7 +482,7 @@ bool client_device_channel::getThermostat(TThermostat_Value *thermostatValue) {
 }
 
 bool client_device_channel::getHvac(THVACValue *hvacValue) {
-  if (hvacValue == NULL || !is_hvac_thermostat_function(this->function)) {
+  if (hvacValue == NULL || !is_hvac_channel_function(this->function)) {
     return false;
   }
 
@@ -594,6 +612,124 @@ void client_device_channel::updateHvacState(bool hasOn, bool on,
   setValue(tmp_value);
 }
 
+void client_device_channel::updateHvacFanState(bool hasOn, bool on,
+                                               bool hasMode,
+                                               unsigned char mode) {
+  if (this->function != SUPLA_CHANNELFNC_HVAC_FAN) return;
+
+  char tmp_value[SUPLA_CHANNELVALUE_SIZE];
+  THVACValue hvacValue;
+
+  memset(tmp_value, 0, sizeof(tmp_value));
+  memset(&hvacValue, 0, sizeof(hvacValue));
+
+  getValue(tmp_value);
+  memcpy(&hvacValue, tmp_value, sizeof(THVACValue));
+
+  hvacValue.Flags &= ~(SUPLA_HVAC_VALUE_FLAG_HEATING |
+                       SUPLA_HVAC_VALUE_FLAG_COOLING |
+                       SUPLA_HVAC_VALUE_FLAG_COOL |
+                       SUPLA_HVAC_VALUE_FLAG_SETPOINT_TEMP_HEAT_SET |
+                       SUPLA_HVAC_VALUE_FLAG_SETPOINT_TEMP_COOL_SET);
+  hvacValue.Flags |= SUPLA_HVAC_VALUE_FLAG_FAN_ENABLED;
+  hvacValue.SetpointTemperatureHeat = 0;
+  hvacValue.SetpointTemperatureCool = 0;
+
+  if (hasMode) {
+    hvacValue.Mode = mode;
+    hvacValue.IsOn = mode == SUPLA_HVAC_MODE_OFF ? 0 : 1;
+  } else if (hasOn) {
+    hvacValue.IsOn = on ? 1 : 0;
+    hvacValue.Mode = on ? SUPLA_HVAC_MODE_FAN_ONLY : SUPLA_HVAC_MODE_OFF;
+  }
+
+  if (hvacValue.Mode != SUPLA_HVAC_MODE_OFF &&
+      hvacValue.Mode != SUPLA_HVAC_MODE_FAN_ONLY) {
+    hvacValue.Mode = hvacValue.IsOn ? SUPLA_HVAC_MODE_FAN_ONLY
+                                    : SUPLA_HVAC_MODE_OFF;
+  }
+
+  memset(tmp_value, 0, sizeof(tmp_value));
+  memcpy(tmp_value, &hvacValue, sizeof(THVACValue));
+  setValue(tmp_value);
+}
+
+void client_device_channel::updateHvacDifferentialState(
+    bool hasOn, bool on, bool hasMode, unsigned char mode,
+    bool hasSetpointTemperatureLow,
+    double setpointTemperatureLow, bool hasSetpointTemperatureHigh,
+    double setpointTemperatureHigh, bool hasHeatingState, bool heatingState,
+    bool hasCoolingState, bool coolingState) {
+  if (this->function != SUPLA_CHANNELFNC_HVAC_THERMOSTAT_DIFFERENTIAL) return;
+
+  char tmp_value[SUPLA_CHANNELVALUE_SIZE];
+  THVACValue hvacValue;
+
+  memset(tmp_value, 0, sizeof(tmp_value));
+  memset(&hvacValue, 0, sizeof(hvacValue));
+
+  getValue(tmp_value);
+  memcpy(&hvacValue, tmp_value, sizeof(THVACValue));
+
+  hvacValue.Flags &= ~(SUPLA_HVAC_VALUE_FLAG_HEATING |
+                       SUPLA_HVAC_VALUE_FLAG_COOLING |
+                       SUPLA_HVAC_VALUE_FLAG_COOL);
+
+  if (hasMode) {
+    hvacValue.Mode = mode;
+    hvacValue.IsOn = mode == SUPLA_HVAC_MODE_OFF ? 0 : 1;
+  } else if (hasOn) {
+    hvacValue.IsOn = on ? 1 : 0;
+
+    if (!on) {
+      hvacValue.Mode = SUPLA_HVAC_MODE_OFF;
+    } else if (hvacValue.Mode == SUPLA_HVAC_MODE_OFF ||
+               hvacValue.Mode == SUPLA_HVAC_MODE_NOT_SET) {
+      hvacValue.Mode = SUPLA_HVAC_MODE_HEAT_COOL;
+    }
+  }
+
+  if (hasSetpointTemperatureLow) {
+    hvacValue.SetpointTemperatureHeat =
+        thermostat_temperature_to_raw(setpointTemperatureLow);
+    hvacValue.Flags |= SUPLA_HVAC_VALUE_FLAG_SETPOINT_TEMP_HEAT_SET;
+  }
+
+  if (hasSetpointTemperatureHigh) {
+    hvacValue.SetpointTemperatureCool =
+        thermostat_temperature_to_raw(setpointTemperatureHigh);
+    hvacValue.Flags |= SUPLA_HVAC_VALUE_FLAG_SETPOINT_TEMP_COOL_SET;
+  }
+
+  if (!hasMode) {
+    if ((hvacValue.Flags & SUPLA_HVAC_VALUE_FLAG_SETPOINT_TEMP_HEAT_SET) != 0 &&
+        (hvacValue.Flags & SUPLA_HVAC_VALUE_FLAG_SETPOINT_TEMP_COOL_SET) != 0 &&
+        hvacValue.IsOn) {
+      hvacValue.Mode = SUPLA_HVAC_MODE_HEAT_COOL;
+    } else if ((hvacValue.Flags &
+                SUPLA_HVAC_VALUE_FLAG_SETPOINT_TEMP_COOL_SET) != 0 &&
+               hvacValue.IsOn) {
+      hvacValue.Mode = SUPLA_HVAC_MODE_COOL;
+    } else if ((hvacValue.Flags &
+                SUPLA_HVAC_VALUE_FLAG_SETPOINT_TEMP_HEAT_SET) != 0 &&
+               hvacValue.IsOn) {
+      hvacValue.Mode = SUPLA_HVAC_MODE_HEAT;
+    }
+  }
+
+  if (hasHeatingState && heatingState) {
+    hvacValue.Flags |= SUPLA_HVAC_VALUE_FLAG_HEATING;
+  }
+
+  if (hasCoolingState && coolingState) {
+    hvacValue.Flags |= SUPLA_HVAC_VALUE_FLAG_COOLING;
+  }
+
+  memset(tmp_value, 0, sizeof(tmp_value));
+  memcpy(tmp_value, &hvacValue, sizeof(THVACValue));
+  setValue(tmp_value);
+}
+
 int client_device_channel::getType(void) {
   if (this->type == 0) {
     switch (this->function) {
@@ -614,7 +750,10 @@ int client_device_channel::getType(void) {
       case SUPLA_CHANNELFNC_CONTROLLINGTHEDOORLOCK:
       case SUPLA_CHANNELFNC_POWERSWITCH:
       case SUPLA_CHANNELFNC_LIGHTSWITCH:
+      case SUPLA_CHANNELFNC_PUMPSWITCH:
+      case SUPLA_CHANNELFNC_HEATORCOLDSOURCESWITCH:
       case SUPLA_CHANNELFNC_CONTROLLINGTHEROLLERSHUTTER:
+      case SUPLA_CHANNELFNC_CONTROLLINGTHEFACADEBLIND:
       case SUPLA_CHANNELFNC_STAIRCASETIMER:
         this->type = SUPLA_CHANNELTYPE_RELAYG5LA1A;
         break;
@@ -681,20 +820,13 @@ int client_device_channel::getType(void) {
         this->type = SUPLA_CHANNELTYPE_THERMOSTAT_HEATPOL_HOMEPLUS;
         break;
       case SUPLA_CHANNELFNC_HVAC_THERMOSTAT:
+      case SUPLA_CHANNELFNC_HVAC_FAN:
+      case SUPLA_CHANNELFNC_HVAC_THERMOSTAT_DIFFERENTIAL:
         this->type = SUPLA_CHANNELTYPE_HVAC;
-        break;
-      case SUPLA_CHANNELFNC_VALVE_OPENCLOSE:  // ver. >= 12
-        this->type = SUPLA_CHANNELTYPE_VALVE_OPENCLOSE;
-        break;
-      case SUPLA_CHANNELFNC_VALVE_PERCENTAGE:
-        this->type = SUPLA_CHANNELTYPE_VALVE_PERCENTAGE;
         break;
 
       case SUPLA_CHANNELFNC_GENERAL_PURPOSE_MEASUREMENT:
         this->type = SUPLA_CHANNELTYPE_GENERAL_PURPOSE_MEASUREMENT;
-        break;
-      case SUPLA_CHANNELFNC_CONTROLLINGTHEENGINESPEED:
-        this->type = SUPLA_CHANNELTYPE_ENGINE;
         break;
       case SUPLA_CHANNELFNC_ACTIONTRIGGER:
         this->type = SUPLA_CHANNELTYPE_ACTIONTRIGGER;
@@ -835,11 +967,20 @@ std::string client_device_channel::getMeasuredTemperatureTopic(void) {
 std::string client_device_channel::getPresetTemperatureTopic(void) {
   return this->presetTemperatureTopic;
 }
+std::string client_device_channel::getPresetTemperatureHighTopic(void) {
+  return this->presetTemperatureHighTopic;
+}
+std::string client_device_channel::getActionTopic(void) {
+  return this->actionTopic;
+}
 std::string client_device_channel::getPositionCommandTopic(void) {
   return this->positionCommandTopic;
 }
 std::string client_device_channel::getPresetTemperatureCommandTopic(void) {
   return this->presetTemperatureCommandTopic;
+}
+std::string client_device_channel::getPresetTemperatureHighCommandTopic(void) {
+  return this->presetTemperatureHighCommandTopic;
 }
 std::string client_device_channel::getStateTemplate(void) {
   return this->stateTemplate;
@@ -855,6 +996,9 @@ std::string client_device_channel::getCommandTemplateOff(void) {
 }
 std::string client_device_channel::getPresetTemperatureCommandTemplate(void) {
   return this->presetTemperatureCommandTemplate;
+}
+std::string client_device_channel::getPresetTemperatureHighCommandTemplate(void) {
+  return this->presetTemperatureHighCommandTemplate;
 }
 std::string client_device_channel::getExecute(void) { return this->execute; }
 std::string client_device_channel::getExecuteOn(void) {
@@ -876,6 +1020,14 @@ bool client_device_channel::getHvacSubfunctionCool(void) {
 }
 unsigned char client_device_channel::getHvacMainThermometerChannelNo(void) {
   return this->hvacMainThermometerChannelNo;
+}
+bool client_device_channel::getHvacConfig(TChannelConfig_HVAC *hvacConfig) {
+  if (hvacConfig == NULL || !this->hvacConfigInitialized) {
+    return false;
+  }
+
+  memcpy(hvacConfig, &this->hvacConfig, sizeof(TChannelConfig_HVAC));
+  return true;
 }
 _supla_int_t client_device_channel::getGeneralValueDivider(void) {
   return this->generalValueDivider;
@@ -1098,6 +1250,14 @@ void client_device_channel::setPresetTemperatureTopic(
     const char *presetTemperatureTopic) {
   this->presetTemperatureTopic = std::string(presetTemperatureTopic);
 }
+void client_device_channel::setPresetTemperatureHighTopic(
+    const char *presetTemperatureHighTopic) {
+  this->presetTemperatureHighTopic =
+      presetTemperatureHighTopic == NULL ? "" : presetTemperatureHighTopic;
+}
+void client_device_channel::setActionTopic(const char *actionTopic) {
+  this->actionTopic = actionTopic == NULL ? "" : actionTopic;
+}
 void client_device_channel::setPositionCommandTopic(
     const char *positionCommandTopic) {
   this->positionCommandTopic = std::string(positionCommandTopic);
@@ -1106,6 +1266,12 @@ void client_device_channel::setPresetTemperatureCommandTopic(
     const char *presetTemperatureCommandTopic) {
   this->presetTemperatureCommandTopic =
       std::string(presetTemperatureCommandTopic);
+}
+void client_device_channel::setPresetTemperatureHighCommandTopic(
+    const char *presetTemperatureHighCommandTopic) {
+  this->presetTemperatureHighCommandTopic =
+      presetTemperatureHighCommandTopic == NULL ? ""
+                                                : presetTemperatureHighCommandTopic;
 }
 void client_device_channel::setStateTemplate(const char *stateTemplate) {
   this->stateTemplate = std::string(stateTemplate);
@@ -1125,6 +1291,13 @@ void client_device_channel::setPresetTemperatureCommandTemplate(
     const char *presetTemperatureCommandTemplate) {
   this->presetTemperatureCommandTemplate =
       std::string(presetTemperatureCommandTemplate);
+}
+void client_device_channel::setPresetTemperatureHighCommandTemplate(
+    const char *presetTemperatureHighCommandTemplate) {
+  this->presetTemperatureHighCommandTemplate =
+      presetTemperatureHighCommandTemplate == NULL
+          ? ""
+          : presetTemperatureHighCommandTemplate;
 }
 void client_device_channel::setExecute(const char *execute) {
   this->execute = std::string(execute);
@@ -1148,9 +1321,23 @@ void client_device_channel::setEsphomeRgbw(bool esphomeRgbw) {
 void client_device_channel::setHvacSubfunctionCool(bool hvacSubfunctionCool) {
   this->hvacSubfunctionCool = hvacSubfunctionCool;
 }
+
+void client_device_channel::setHvacReportAsThermostat(bool value) {
+  this->hvacReportAsThermostat = value;
+}
 void client_device_channel::setHvacMainThermometerChannelNo(
     unsigned char channelNo) {
   this->hvacMainThermometerChannelNo = channelNo;
+}
+void client_device_channel::setHvacConfig(const TChannelConfig_HVAC *hvacConfig) {
+  if (hvacConfig == NULL) {
+    memset(&this->hvacConfig, 0, sizeof(this->hvacConfig));
+    this->hvacConfigInitialized = false;
+    return;
+  }
+
+  memcpy(&this->hvacConfig, hvacConfig, sizeof(TChannelConfig_HVAC));
+  this->hvacConfigInitialized = true;
 }
 void client_device_channel::setGeneralValueDivider(_supla_int_t value) {
   this->generalValueDivider = value;
@@ -1210,6 +1397,8 @@ void client_device_channel::transformIncomingState(
     case SUPLA_CHANNELFNC_POWERSWITCH:
     case SUPLA_CHANNELFNC_LIGHTSWITCH:
     case SUPLA_CHANNELFNC_STAIRCASETIMER:
+    case SUPLA_CHANNELFNC_PUMPSWITCH:
+    case SUPLA_CHANNELFNC_HEATORCOLDSOURCESWITCH:
     case SUPLA_CHANNELFNC_CONTROLLINGTHEDOORLOCK:
     case SUPLA_CHANNELFNC_CONTROLLINGTHEGARAGEDOOR:
     case SUPLA_CHANNELFNC_CONTROLLINGTHEGATEWAYLOCK:
@@ -1224,7 +1413,8 @@ void client_device_channel::transformIncomingState(
     case SUPLA_CHANNELFNC_MAILSENSOR:
       value[0] = value[0] > 0 ? 0 : 1;
       break;
-    case SUPLA_CHANNELFNC_CONTROLLINGTHEROLLERSHUTTER: {
+    case SUPLA_CHANNELFNC_CONTROLLINGTHEROLLERSHUTTER:
+    case SUPLA_CHANNELFNC_CONTROLLINGTHEFACADEBLIND: {
       int shutter = static_cast<unsigned char>(value[0]);
 
       if (shutter < 0) shutter = 0;
@@ -1295,6 +1485,8 @@ void client_device_channels::getMqttSubscriptionTopics(
     push_topic_if_set(vect, channel->getColorTopic());
     push_topic_if_set(vect, channel->getMeasuredTemperatureTopic());
     push_topic_if_set(vect, channel->getPresetTemperatureTopic());
+    push_topic_if_set(vect, channel->getPresetTemperatureHighTopic());
+    push_topic_if_set(vect, channel->getActionTopic());
   }
 }
 int client_device_channels::getChannelCount(void) {
@@ -1341,7 +1533,9 @@ void client_device_channels::get_channels_for_topic(
         topic_matches(channel->getColorBrightnessTopic(), topic) ||
         topic_matches(channel->getColorTopic(), topic) ||
         topic_matches(channel->getMeasuredTemperatureTopic(), topic) ||
-        topic_matches(channel->getPresetTemperatureTopic(), topic)) {
+        topic_matches(channel->getPresetTemperatureTopic(), topic) ||
+        topic_matches(channel->getPresetTemperatureHighTopic(), topic) ||
+        topic_matches(channel->getActionTopic(), topic)) {
       vect->push_back(channel);
       continue;
     }
@@ -1381,7 +1575,9 @@ client_device_channel *client_device_channels::find_channel_by_topic(
         topic_matches(channel->getColorBrightnessTopic(), topic) ||
         topic_matches(channel->getColorTopic(), topic) ||
         topic_matches(channel->getMeasuredTemperatureTopic(), topic) ||
-        topic_matches(channel->getPresetTemperatureTopic(), topic)) {
+        topic_matches(channel->getPresetTemperatureTopic(), topic) ||
+        topic_matches(channel->getPresetTemperatureHighTopic(), topic) ||
+        topic_matches(channel->getActionTopic(), topic)) {
       return channel;
     }
 

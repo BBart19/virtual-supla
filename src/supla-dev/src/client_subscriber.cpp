@@ -26,6 +26,77 @@
 #include "channel-io.h"
 #include "supla-client-lib/srpc.h"
 
+extern client_device_channels *channels;
+
+bool is_temperature_channel_function_for_hvac_bridge(int function) {
+  return function == SUPLA_CHANNELFNC_THERMOMETER ||
+         function == SUPLA_CHANNELFNC_HUMIDITYANDTEMPERATURE;
+}
+
+client_device_channel *find_hvac_bridge_temperature_channel(
+    client_device_channel *channel) {
+  if (channel == NULL || channels == NULL) return NULL;
+
+  unsigned char configuredChannelNo = channel->getHvacMainThermometerChannelNo();
+  if (configuredChannelNo > 0 && configuredChannelNo != channel->getNumber()) {
+    client_device_channel *configuredChannel =
+        channels->find_channel(configuredChannelNo);
+
+    if (configuredChannel != NULL &&
+        is_temperature_channel_function_for_hvac_bridge(
+            configuredChannel->getFunction())) {
+      return configuredChannel;
+    }
+  }
+
+  for (int idx = 0; idx < channels->getChannelCount(); idx++) {
+    client_device_channel *candidate = channels->getChannel(idx);
+
+    if (candidate == NULL || candidate->getNumber() == channel->getNumber()) {
+      continue;
+    }
+
+    if (is_temperature_channel_function_for_hvac_bridge(
+            candidate->getFunction())) {
+      return candidate;
+    }
+  }
+
+  return NULL;
+}
+
+bool bridge_hvac_measured_temperature(client_device_channel *hvacChannel,
+                                      double measuredTemperature,
+                                      _func_channelio_valuechanged cb,
+                                      void *user_data) {
+  client_device_channel *temperatureChannel =
+      find_hvac_bridge_temperature_channel(hvacChannel);
+  if (temperatureChannel == NULL) return false;
+
+  char value[SUPLA_CHANNELVALUE_SIZE];
+  memset(value, 0, sizeof(value));
+
+  if (temperatureChannel->getFunction() == SUPLA_CHANNELFNC_THERMOMETER) {
+    temperatureChannel->setDouble(measuredTemperature);
+  } else if (temperatureChannel->getFunction() ==
+             SUPLA_CHANNELFNC_HUMIDITYANDTEMPERATURE) {
+    double currentTemp = 0;
+    double currentHum = 0;
+    bool isTemp = false;
+    bool isHum = false;
+    temperatureChannel->getTempHum(&currentTemp, &currentHum, &isTemp, &isHum);
+    temperatureChannel->setTempHum(measuredTemperature,
+                                   isHum ? currentHum : 0);
+  } else {
+    return false;
+  }
+
+  temperatureChannel->getValue(value);
+  if (cb) cb(temperatureChannel->getNumber(), value, user_data);
+
+  return true;
+}
+
 bool value_exists(jsoncons::json payload, std::string path) {
   try {
     return jsoncons::jsonpointer::contains(payload, path);
@@ -80,6 +151,41 @@ std::string json_value_to_string(const jsoncons::json &value) {
   }
 
   return "";
+}
+
+bool parse_hvac_mode_string(const std::string &value, unsigned char *mode) {
+  if (mode == NULL) return false;
+
+  std::string normalized = to_lower_copy(trim_copy(value));
+
+  if (normalized == "off") {
+    *mode = SUPLA_HVAC_MODE_OFF;
+    return true;
+  }
+
+  if (normalized == "heat_cool" || normalized == "heatcool" ||
+      normalized == "auto") {
+    *mode = SUPLA_HVAC_MODE_HEAT_COOL;
+    return true;
+  }
+
+  if (normalized == "heat") {
+    *mode = SUPLA_HVAC_MODE_HEAT;
+    return true;
+  }
+
+  if (normalized == "cool") {
+    *mode = SUPLA_HVAC_MODE_COOL;
+    return true;
+  }
+
+  if (normalized == "fan_only" || normalized == "fanonly" ||
+      normalized == "fan") {
+    *mode = SUPLA_HVAC_MODE_FAN_ONLY;
+    return true;
+  }
+
+  return false;
 }
 
 bool json_pointer_get_string(const jsoncons::json &payload,
@@ -1221,6 +1327,9 @@ bool handle_subscribed_message(client_device_channel* channel,
       channel->getMeasuredTemperatureTopic().compare(topic) == 0;
   bool isPresetTemperatureTopic =
       channel->getPresetTemperatureTopic().compare(topic) == 0;
+  bool isPresetTemperatureHighTopic =
+      channel->getPresetTemperatureHighTopic().compare(topic) == 0;
+  bool isActionTopic = channel->getActionTopic().compare(topic) == 0;
 
   if (payloadOn.length() == 0) payloadOn = "1";
   if (payloadOff.length() == 0) payloadOff = "0";
@@ -1233,6 +1342,8 @@ bool handle_subscribed_message(client_device_channel* channel,
       case SUPLA_CHANNELFNC_POWERSWITCH:
       case SUPLA_CHANNELFNC_LIGHTSWITCH:
       case SUPLA_CHANNELFNC_STAIRCASETIMER:
+      case SUPLA_CHANNELFNC_PUMPSWITCH:
+      case SUPLA_CHANNELFNC_HEATORCOLDSOURCESWITCH:
       case SUPLA_CHANNELFNC_CONTROLLINGTHEDOORLOCK:
       case SUPLA_CHANNELFNC_CONTROLLINGTHEGARAGEDOOR:
       case SUPLA_CHANNELFNC_CONTROLLINGTHEGATEWAYLOCK:
@@ -1333,7 +1444,8 @@ bool handle_subscribed_message(client_device_channel* channel,
         return true;
 
       } break;
-      case SUPLA_CHANNELFNC_CONTROLLINGTHEROLLERSHUTTER: {
+      case SUPLA_CHANNELFNC_CONTROLLINGTHEROLLERSHUTTER:
+      case SUPLA_CHANNELFNC_CONTROLLINGTHEFACADEBLIND: {
         auto temp = atoi(template_value.c_str());
         if (temp < 0) temp = 0;
         if (temp > 100) temp = 100;
@@ -1721,6 +1833,130 @@ bool handle_subscribed_message(client_device_channel* channel,
 
         channel->updateHvacState(hasOn, on, hasSetpointTemperature,
                                  setpointTemperature);
+        channel->getValue(value);
+
+        if (cb) cb(channelNumber, value, user_data);
+
+        return true;
+      } break;
+      case SUPLA_CHANNELFNC_HVAC_FAN: {
+        bool hasOn = false;
+        bool on = false;
+        bool hasMode = false;
+        unsigned char mode = SUPLA_HVAC_MODE_NOT_SET;
+
+        if (isStateTopic) {
+          if (parse_hvac_mode_string(template_value, &mode)) {
+            if (mode == SUPLA_HVAC_MODE_OFF ||
+                mode == SUPLA_HVAC_MODE_FAN_ONLY) {
+              hasMode = true;
+              hasOn = true;
+              on = mode != SUPLA_HVAC_MODE_OFF;
+            }
+          } else if (payloadOn.compare(template_value) == 0) {
+            hasOn = true;
+            on = true;
+          } else if (payloadOff.compare(template_value) == 0) {
+            hasOn = true;
+            on = false;
+          }
+        }
+
+        if (!hasOn && !hasMode) {
+          return false;
+        }
+
+        channel->updateHvacFanState(hasOn, on, hasMode, mode);
+        channel->getValue(value);
+
+        if (cb) cb(channelNumber, value, user_data);
+
+        return true;
+      } break;
+      case SUPLA_CHANNELFNC_HVAC_THERMOSTAT_DIFFERENTIAL: {
+        bool hasOn = false;
+        bool on = false;
+        bool hasMode = false;
+        unsigned char mode = SUPLA_HVAC_MODE_NOT_SET;
+        bool hasMeasuredTemperature = false;
+        double measuredTemperature = 0;
+        bool hasSetpointTemperatureLow = false;
+        bool hasSetpointTemperatureHigh = false;
+        bool hasHeatingState = false;
+        bool heatingState = false;
+        bool hasCoolingState = false;
+        bool coolingState = false;
+        double setpointTemperatureLow = 0;
+        double setpointTemperatureHigh = 0;
+
+        if (isStateTopic) {
+          if (parse_hvac_mode_string(template_value, &mode)) {
+            if (mode == SUPLA_HVAC_MODE_OFF ||
+                mode == SUPLA_HVAC_MODE_HEAT ||
+                mode == SUPLA_HVAC_MODE_COOL ||
+                mode == SUPLA_HVAC_MODE_HEAT_COOL) {
+              hasMode = true;
+              hasOn = true;
+              on = mode != SUPLA_HVAC_MODE_OFF;
+            }
+          } else if (payloadOn.compare(template_value) == 0) {
+            hasOn = true;
+            on = true;
+          } else if (payloadOff.compare(template_value) == 0) {
+            hasOn = true;
+            on = false;
+          }
+        }
+
+        if (isPresetTemperatureTopic) {
+          setpointTemperatureLow = std::stod(template_value);
+          hasSetpointTemperatureLow = true;
+        }
+
+        if (isMeasuredTemperatureTopic) {
+          measuredTemperature = std::stod(template_value);
+          hasMeasuredTemperature = true;
+        }
+
+        if (isPresetTemperatureHighTopic) {
+          setpointTemperatureHigh = std::stod(template_value);
+          hasSetpointTemperatureHigh = true;
+        }
+
+        if (isActionTopic) {
+          std::string action = to_lower_copy(trim_copy(template_value));
+          hasHeatingState = true;
+          hasCoolingState = true;
+          heatingState = false;
+          coolingState = false;
+
+          if (action == "heating" || action == "heat") {
+            heatingState = true;
+          } else if (action == "cooling" || action == "cool") {
+            coolingState = true;
+          }
+        }
+
+        if (!hasOn && !hasSetpointTemperatureLow &&
+            !hasSetpointTemperatureHigh && !hasMeasuredTemperature &&
+            !isActionTopic) {
+          return false;
+        }
+
+        if (hasMeasuredTemperature) {
+          bool bridged = bridge_hvac_measured_temperature(
+              channel, measuredTemperature, cb, user_data);
+          if (!hasOn && !hasSetpointTemperatureLow &&
+              !hasSetpointTemperatureHigh && !isActionTopic) {
+            return bridged;
+          }
+        }
+
+        channel->updateHvacDifferentialState(
+            hasOn, on, hasMode, mode, hasSetpointTemperatureLow,
+            setpointTemperatureLow,
+            hasSetpointTemperatureHigh, setpointTemperatureHigh,
+            hasHeatingState, heatingState, hasCoolingState, coolingState);
         channel->getValue(value);
 
         if (cb) cb(channelNumber, value, user_data);

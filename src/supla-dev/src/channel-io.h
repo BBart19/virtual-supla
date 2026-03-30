@@ -124,10 +124,16 @@ void channelio_set_mqtt_measured_temperature_topic_in(unsigned char number,
                                                       const char *value);
 void channelio_set_mqtt_preset_temperature_topic_in(unsigned char number,
                                                     const char *value);
+void channelio_set_mqtt_preset_temperature_high_topic_in(
+    unsigned char number, const char *value);
+void channelio_set_mqtt_action_topic_in(unsigned char number,
+                                        const char *value);
 void channelio_set_mqtt_position_topic_out(unsigned char number,
                                            const char *value);
 void channelio_set_mqtt_preset_temperature_topic_out(unsigned char number,
                                                      const char *value);
+void channelio_set_mqtt_preset_temperature_high_topic_out(
+    unsigned char number, const char *value);
 
 void channelio_set_mqtt_template_in(unsigned char number, const char *value);
 void channelio_set_mqtt_template_out(unsigned char number, const char *value);
@@ -137,14 +143,36 @@ void channelio_set_mqtt_template_off_out(unsigned char number,
                                          const char *value);
 void channelio_set_mqtt_preset_temperature_template_out(unsigned char number,
                                                         const char *value);
+void channelio_set_mqtt_preset_temperature_high_template_out(
+    unsigned char number, const char *value);
 
 void channelio_set_mqtt_retain(unsigned char number, unsigned char value);
 void channelio_set_invert_state(unsigned char number, unsigned char value);
 void channelio_set_esphome_cover(unsigned char number, unsigned char value);
 void channelio_set_esphome_rgbw(unsigned char number, unsigned char value);
+void channelio_set_hvac_report_as_thermostat(unsigned char number,
+                                             unsigned char value);
 void channelio_set_hvac_subfunction(unsigned char number, const char *value);
 void channelio_set_hvac_main_thermometer_channel(unsigned char number,
                                                  unsigned char channelNo);
+void channelio_set_hvac_aux_thermometer_channel(unsigned char number,
+                                                unsigned char channelNo);
+void channelio_set_hvac_aux_thermometer_type(unsigned char number,
+                                             const char *value);
+void channelio_set_hvac_algorithm(unsigned char number, const char *value);
+void channelio_set_hvac_min_on_time_s(unsigned char number,
+                                      unsigned short value);
+void channelio_set_hvac_min_off_time_s(unsigned char number,
+                                       unsigned short value);
+void channelio_set_hvac_output_value_on_error(unsigned char number,
+                                              signed char value);
+void channelio_set_hvac_antifreeze_overheat_protection(
+    unsigned char number, unsigned char value);
+void channelio_set_hvac_aux_minmax_setpoint_enabled(unsigned char number,
+                                                    unsigned char value);
+void channelio_set_hvac_temperature_cfg(unsigned char number,
+                                        unsigned int key,
+                                        _supla_int16_t value);
 void channelio_set_general_value_divider(unsigned char number,
                                          _supla_int_t value);
 void channelio_set_general_value_multiplier(unsigned char number,

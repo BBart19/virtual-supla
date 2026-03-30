@@ -1,8 +1,8 @@
 # SUPLA VIRTUAL-DEVICE
 
-![supla-virtual-device](https://github.com/lukbek/supla-core/workflows/supla-virtual-device/badge.svg?branch=supla-mqtt-dev)
+This repository is a standalone fork of [`supla-dev`](https://github.com/SUPLA/supla-core/tree/master/supla-dev) and evolution of [`supla-filesensors`](https://github.com/fracz/supla-filesensors) that is able to read measurement values from files or MQTT and send them to the SUPLA, so you can display them in the app, create direct links etc. You can create buttons and perform actions such as publishing messages to MQTT or executing system commands via the SUPLA application.
 
-This is a fork of [`supla-dev`](https://github.com/SUPLA/supla-core/tree/master/supla-dev) and evolution of [`supla-filesensors`](https://github.com/fracz/supla-filesensors) that is able to read measurement values from files or MQTT and send them to the SUPLA, so you can display them in the app, create direct links etc. You can create buttons and perform actions such as publishing messages to MQTT or executing system commands via the SUPLA application.
+Unlike the original historical layout, this repository already contains bundled and patched `supla-core` sources in `./src`. `install.sh` just restores required symlinks and builds the bundled sources.
 
 <b>Your are using this software for your own risk. Please don't rely on it if it comes to a life danger situation.</b>
 
@@ -26,24 +26,29 @@ e.g. RaspberryPi or any Raspberry-like creation, VPS, your laptop etc.
 
 # Control device supported
 
-* `GATEWAYLOCK` `GATE` `GARAGEDOOR`, `DOORLOCK`, `POWERSWITCH`, `LIGHTSWITCH`, `ROLLERSHUTTER`, `THERMOSTAT`, `THERMOSTAT_HEATPOL_HOMEPLUS`, `HVAC_THERMOSTAT`, `DIMMER`, `RGBLIGHTNING`, `DIMMERANDRGB`
+* `GATEWAYLOCK` `GATE` `GARAGEDOOR`, `DOORLOCK`, `POWERSWITCH`, `LIGHTSWITCH`, `PUMP_SWITCH`, `HEAT_OR_COLD_SOURCE_SWITCH`, `ROLLERSHUTTER`, `FACADEBLIND`, `HVAC_FAN` / `FAN`, `THERMOSTAT`, `THERMOSTAT_HEATPOL_HOMEPLUS`, `HVAC_THERMOSTAT`, `HVAC_THERMOSTAT_DIFFERENTIAL`, `DIMMER`, `RGBLIGHTING`, `DIMMERANDRGB`
 
 # Installation
 
 ```
 sudo apt-get update
 sudo apt-get install -y git libssl-dev build-essential curl
-git clone https://github.com/lukbek/supla-virtual-device.git
-cd supla-virtual-device
+git clone https://github.com/BBart19/virtual-supla.git
+cd virtual-supla
 ./install.sh
 ```
+
+If you use WSL, building from your Linux home directory is the safest option.
+Building directly from `/mnt/c/...` may fail on symlink-heavy checkouts if your
+filesystem or Git settings do not preserve symbolic links correctly.
 
 ### Upgrade
 
 Stop `supla-virtual-device` and execute:
 
 ```
-cd supla-virtual-device
+cd virtual-supla
+git pull
 ./install.sh
 ```
 
@@ -107,10 +112,11 @@ For the `TEMPERATURE_AND_HUMIDITY` which expects two values, put them in separat
 
 For the other sensors like NOLIQUID or relay it should have one line with 0/1 value
 
-For `ROLLERSHUTTER` it should have one line with position in range `0-100`,
+For `ROLLERSHUTTER` and `FACADEBLIND` it should have one line with position in range `0-100`,
 where `0` means fully closed and `100` means fully open.
 
-For `THERMOSTAT`, `THERMOSTAT_HEATPOL_HOMEPLUS` and `HVAC_THERMOSTAT` it should have five lines:
+For `THERMOSTAT`, `THERMOSTAT_HEATPOL_HOMEPLUS`, `HVAC_FAN`, `HVAC_THERMOSTAT` and
+`HVAC_THERMOSTAT_DIFFERENTIAL` it should have five lines:
 
 ```
 0
@@ -121,11 +127,14 @@ true
 ```
 
 These lines mean: `mode`, `power`, `preset temperature`, `measured temperature`, `fan`.
-Currently only `power`, `preset temperature` and `measured temperature` are used by
-`supla-virtual-device`. For `HVAC_THERMOSTAT` the file-based state is used for power
-and target temperature. If you want the normal SUPLA thermostat view to show the
-current temperature, add a separate `TEMPERATURE` channel and link it in SUPLA as
-the main thermometer for that HVAC thermostat.
+Currently only the parts needed by each bridge are used by `supla-virtual-device`.
+For `HVAC_FAN` only `mode` and `power` matter, and the effective states are `off`
+and `fan_only`. For `HVAC_THERMOSTAT` the file-based state is used for power and
+target temperature. For `HVAC_THERMOSTAT_DIFFERENTIAL` the same single file target
+is mirrored into both low/high setpoints. If you want the SUPLA HVAC screen to
+show the current temperature, add a separate `TEMPERATURE` or
+`TEMPERATURE_AND_HUMIDITY` channel and link it as the main thermometer of that
+HVAC channel.
 
 For `IC_ELECTRICITY_METER`, `IC_GAS_METER` and `IC_WATER_METER` the simplest file
 format is a single numeric total value, for example:
@@ -165,7 +174,7 @@ state_topic=sensors/temp/kitchen/state
 * `state_topic`: the exact topic that will be subscribed to by supla-virtual-device
    raw value means that in payload id should be raw single value like 23.5 (dot separated)
 * `invert_state`: optional `0/1` flag that inverts the incoming state before it is sent to SUPLA.
-  For binary channels it swaps `0` and `1`. For `ROLLERSHUTTER` it converts `0-100` into `100-0`.
+  For binary channels it swaps `0` and `1`. For `ROLLERSHUTTER` and `FACADEBLIND` it converts `0-100` into `100-0`.
 
 For `HUMIDITY` use the same format with a single humidity value:
 
@@ -175,8 +184,9 @@ function=HUMIDITY
 state_topic=sensors/humidity/kitchen/state
 ```
 
-For `GENERAL` use the same format with a single numeric value. You can also
-define how SUPLA should display it:
+For `GENERAL` use the same format with a single numeric value. `GENERAL` is a
+short alias for the official SUPLA function name `GENERAL_PURPOSE_MEASUREMENT`.
+You can also define how SUPLA should display it:
 
 ```
 [CHANNEL_X]
@@ -299,7 +309,7 @@ set the corresponding availability flag for that measurement type. In practice
 that means the app should only show sections for the measurements you actually
 provide.
 
-For `DIMMER`, `RGBLIGHTNING` and `DIMMERANDRGB` you can read state from MQTT.
+For `DIMMER`, `RGBLIGHTING` and `DIMMERANDRGB` you can read state from MQTT.
 The simplest supported layout is:
 
 ```
@@ -331,7 +341,7 @@ payload_off=OFF
 Supported raw MQTT/file formats:
 
 * `DIMMER`: single brightness value `0-100`
-* `RGBLIGHTNING`: `#RRGGBB`, `0xRRGGBB`, `R G B`, optionally followed by color brightness `0-100`
+* `RGBLIGHTING`: `#RRGGBB`, `0xRRGGBB`, `R G B`, optionally followed by color brightness `0-100`
 * `DIMMERANDRGB`: `brightness color_brightness R G B` and optional trailing `on_off`
 
 For RGB command templates these placeholders are available:
@@ -410,12 +420,87 @@ state_topic=switch/kitchen/state
 payload_on=1
 payload_off=0
 command_topic=switch/kitchen/command
-command_template=$value$
+command_payload_on=1
+command_payload_off=0
 ```
 * `command_topic`: MQTT publish topic
-* `command_template`: MQTT payload $value$ will be replaced with channel current value
 * `payload_on`: value template that means channel on value
 * `payload_off`: value template that means channel off value
+* `command_payload_on`: MQTT payload sent when SUPLA turns the channel on
+* `command_payload_off`: MQTT payload sent when SUPLA turns the channel off
+* `command_template`: optional generic MQTT template, still available for more advanced payloads
+
+`command_payload_on` and `command_payload_off` are aliases for
+`command_template_on` and `command_template_off`. They are especially useful for
+binary channels when the reported state values differ from the command values.
+They do not affect how incoming MQTT state is parsed, only what `supla-virtual-device`
+publishes to `command_topic`.
+
+Recommended usage:
+* use `command_payload_on` and `command_payload_off` for binary channels when you just need separate `on` and `off` payloads
+* use `command_template` when you want a single shared template, for example JSON with `$value$`
+* use `command_template_on` and `command_template_off` when the per-state payloads need a more descriptive template-style name, for example HVAC channels
+
+Publish fallback order for binary channels:
+1. `command_payload_on` / `command_payload_off` or `command_template_on` / `command_template_off`
+2. `command_template`
+
+Examples:
+```
+# state uses ON/OFF, command uses START/STOP
+payload_on=ON
+payload_off=OFF
+command_payload_on=START
+command_payload_off=STOP
+```
+
+```
+# one shared JSON template
+command_template={"state":"$value$"}
+payload_on=ON
+payload_off=OFF
+```
+
+`PUMP_SWITCH` / `PUMPSWITCH` and `HEAT_OR_COLD_SOURCE_SWITCH` /
+`HEATORCOLDSOURCESWITCH` use the same MQTT format as `POWERSWITCH`. They are
+reported to SUPLA as their dedicated functions, but from the MQTT bridge point
+of view they behave like normal binary switches. These two functions require
+SUPLA protocol version `25`, so `supla-virtual-device` will request protocol 25
+automatically when they are configured.
+
+Important limitation: in the reference `SuplaDevice` implementation these two
+functions are treated as HVAC-related helper relays, not as normal standalone
+user-controlled switches. That means the official SUPLA clients may show their
+state but still refuse or skip manual switching. If you need guaranteed manual
+control from SUPLA, use `POWERSWITCH` instead.
+
+`GATE`, `GATEWAYLOCK`, `GARAGEDOOR` and `DOORLOCK` also support
+`command_payload_on` / `command_payload_off` now. If you do not set them, they
+keep the old `command_template` behavior.
+
+Example pump switch:
+```
+[CHANNEL_X]
+function=PUMP_SWITCH
+state_topic=switch/pump/state
+payload_on=ON
+payload_off=OFF
+command_topic=switch/pump/command
+command_payload_on=START
+command_payload_off=STOP
+```
+
+Example heat/cold source switch:
+```
+[CHANNEL_X]
+function=HEAT_OR_COLD_SOURCE_SWITCH
+state_topic=switch/heat_or_cold_source/state
+payload_on=ON
+payload_off=OFF
+command_topic=switch/heat_or_cold_source/command
+command_payload_on=HEAT
+command_payload_off=COOL
+```
 
 # Publishing MQTT roller shutter command
 ```
@@ -429,6 +514,47 @@ command_template=$value$
 * `state_topic`: should provide the current shutter position in range `0-100`
 * `invert_state`: use `1` when your MQTT source reports open percentage and you want SUPLA to display closed percentage
 * `command_template`: MQTT payload `$value$` will be replaced with requested shutter position in range `0-100`
+
+`FACADEBLIND` uses the same MQTT and file format as `ROLLERSHUTTER`, for example:
+```
+[CHANNEL_X]
+function=FACADEBLIND
+state_topic=facadeblind/livingroom/state
+invert_state=1
+command_topic=facadeblind/livingroom/command
+command_template=$value$
+```
+This first implementation gives the dedicated SUPLA facade blind function and UI
+category, but it currently uses the same position-only behavior as `ROLLERSHUTTER`
+and does not implement separate slat tilt control yet.
+
+# Publishing MQTT HVAC fan command
+```
+[CHANNEL_X]
+function=HVAC_FAN
+state_topic=esphome/device/climate/fan/mode/state
+payload_on=fan_only
+payload_off=off
+command_topic=esphome/device/climate/fan/mode/command
+command_template_on=fan_only
+command_template_off=off
+```
+* `function=HVAC_FAN`: enables the official SUPLA HVAC fan function. `FAN` is kept as a config alias.
+* `state_topic`: current HVAC fan mode, usually `fan_only` or `off`
+* `command_topic`: MQTT topic used for SUPLA fan on/off commands
+* `command_template_on`, `command_template_off`: payloads published for turning the fan on and off
+
+`HVAC_FAN` is currently only partially usable because the official SUPLA ecosystem
+does not seem to support it fully yet. In practice:
+* the public SUPLA Android app still treats `HVAC_FAN` as unsupported
+* the SUPLA web UI may reject actions such as `TURN_ON`, `TURN_OFF`,
+  `HVAC_SWITCH_TO_PROGRAM_MODE` and `HVAC_SWITCH_TO_MANUAL_MODE`
+* the SUPLA web UI may also omit the main thermometer picker even though the
+  protocol uses the standard HVAC config structure
+
+So `HVAC_FAN` should currently be treated as experimental in `supla-virtual-device`.
+The MQTT bridge is implemented, but final behavior still depends on upstream SUPLA
+web/mobile support.
 
 # Publishing MQTT roller shutter command to ESPHome cover
 ```
@@ -508,6 +634,51 @@ will try to auto-detect the first local temperature channel.
 Program mode for `HVAC_THERMOSTAT` is handled locally by `supla-virtual-device` using the
 weekly schedule received from SUPLA. When the program changes, the virtual device publishes the
 resulting MQTT `command_topic` and `preset_temperature_command_topic` values automatically.
+
+# Publishing MQTT HVAC differential thermostat command
+```
+[CHANNEL_X]
+function=HVAC_THERMOSTAT_DIFFERENTIAL
+main_thermometer_channel_no=Y
+# report_as_hvac_thermostat=1
+state_topic=esphome/device/climate/differential/mode/state
+payload_on=heat_cool
+payload_off=off
+command_topic=esphome/device/climate/differential/mode/command
+command_template_on=heat_cool
+command_template_off=off
+target_temperature_low_topic=esphome/device/climate/differential/target_temperature_low/state
+target_temperature_low_command_topic=esphome/device/climate/differential/target_temperature_low/command
+target_temperature_low_command_template=$value$
+target_temperature_high_topic=esphome/device/climate/differential/target_temperature_high/state
+target_temperature_high_command_topic=esphome/device/climate/differential/target_temperature_high/command
+target_temperature_high_command_template=$value$
+current_temperature_topic=esphome/device/climate/differential/current_temperature/state
+action_topic=esphome/device/climate/differential/action/state
+```
+* `function=HVAC_THERMOSTAT_DIFFERENTIAL`: enables the ESPHome `bang_bang` bridge with low/high setpoints and the differential thermostat view in SUPLA web.
+* `main_thermometer_channel_no`: optional number of a local `TEMPERATURE` or `TEMPERATURE_AND_HUMIDITY` channel used as the current temperature source in SUPLA. You can also choose it from the SUPLA web config.
+* `report_as_hvac_thermostat=1`: optional compatibility mode for SUPLA mobile. It reports the channel as a regular `HVAC_THERMOSTAT`, so the phone stops showing "unsupported", but the web view will also change from differential `min/max` to the regular thermostat screen.
+* `state_topic` / `command_topic`: MQTT mode bridge, typically ESPHome `mode/state` and `mode/command`
+* `target_temperature_low_*`: low setpoint topics used by ESPHome `bang_bang`
+* `target_temperature_high_*`: high setpoint topics used by ESPHome `bang_bang`
+* `current_temperature_topic`: optional ESPHome current temperature topic. When set, `supla-virtual-device` updates the selected SUPLA thermometer channel from this MQTT value.
+* `action_topic`: optional ESPHome action topic; when present it updates SUPLA heating/cooling state flags
+
+This bridge intentionally keeps the control logic in ESPHome. `supla-virtual-device`
+only mirrors the SUPLA interface to MQTT topics such as `mode`,
+`target_temperature_low`, `target_temperature_high` and optional `action`.
+
+`HVAC_THERMOSTAT_DIFFERENTIAL` is also only partially supported by the official
+SUPLA clients:
+* the SUPLA web UI can show the differential thermostat view with `min/max`
+* the public SUPLA mobile app still treats the differential function as unsupported
+* `report_as_hvac_thermostat=1` is a compatibility workaround for mobile, but then
+  the channel is reported as a regular `HVAC_THERMOSTAT` and the web view also
+  changes from differential `min/max` to the normal thermostat screen
+
+So this function is best treated as web-first unless the channel is explicitly
+reported as a normal HVAC thermostat for mobile compatibility.
 
 # Autostarting
 

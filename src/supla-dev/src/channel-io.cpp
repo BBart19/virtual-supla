@@ -71,6 +71,7 @@ static unsigned char
     runtime_hvac_countdown_restore_available[SUPLA_CHANNELMAXCOUNT + 1];
 static unsigned _supla_int_t
     runtime_hvac_countdown_last_sent[SUPLA_CHANNELMAXCOUNT + 1];
+static unsigned long long runtime_impulse_end_ms[SUPLA_CHANNELMAXCOUNT + 2];
 static unsigned char runtime_device_config_received = 0;
 static unsigned char initial_device_config_sent = 0;
 
@@ -87,6 +88,39 @@ char channelio_set_hvac_value(client_device_channel *channel,
                               unsigned int time_ms);
 
 namespace {
+
+bool channelio_is_impulse_function(int function) {
+  switch (function) {
+    case SUPLA_CHANNELFNC_CONTROLLINGTHEGATE:
+    case SUPLA_CHANNELFNC_CONTROLLINGTHEDOORLOCK:
+    case SUPLA_CHANNELFNC_CONTROLLINGTHEGATEWAYLOCK:
+    case SUPLA_CHANNELFNC_CONTROLLINGTHEGARAGEDOOR:
+      return true;
+    default:
+      return false;
+  }
+}
+
+unsigned char channelio_impulse_index(unsigned char channelNumber) {
+  if (channelNumber > SUPLA_CHANNELMAXCOUNT) return 0;
+
+  return channelNumber + 1;
+}
+
+unsigned long long channelio_now_ms() {
+  struct timeval now;
+  gettimeofday(&now, NULL);
+
+  return static_cast<unsigned long long>(now.tv_sec) * 1000ULL +
+         static_cast<unsigned long long>(now.tv_usec / 1000ULL);
+}
+
+void channelio_clear_impulse_timeout(unsigned char channelNumber) {
+  unsigned char trackingIndex = channelio_impulse_index(channelNumber);
+  if (trackingIndex == 0) return;
+
+  runtime_impulse_end_ms[trackingIndex] = 0;
+}
 
 unsigned char channelio_tracking_index(unsigned char channelNumber) {
   if (channelNumber > SUPLA_CHANNELMAXCOUNT) return 0;
@@ -156,9 +190,60 @@ void channelio_set_hvac_temperature(THVACTemperatureCfg *temperatures,
   }
 }
 
+bool channelio_has_hvac_temperature(const THVACTemperatureCfg *temperatures,
+                                    unsigned _supla_int_t key) {
+  return temperatures != NULL && key != 0 && (temperatures->Index & key) != 0;
+}
+
+void channelio_set_hvac_temperature_if_missing(
+    THVACTemperatureCfg *temperatures, unsigned _supla_int_t key,
+    _supla_int16_t value) {
+  if (!channelio_has_hvac_temperature(temperatures, key)) {
+    channelio_set_hvac_temperature(temperatures, key, value);
+  }
+}
+
+bool channelio_get_hvac_config_or_default(client_device_channel *channel,
+                                          TChannelConfig_HVAC *config) {
+  if (channel == NULL || config == NULL) return false;
+
+  if (!channel->getHvacConfig(config)) {
+    memset(config, 0, sizeof(TChannelConfig_HVAC));
+  }
+
+  return true;
+}
+
+unsigned _supla_int16_t channelio_hvac_available_algorithms(
+    client_device_channel *channel) {
+  if (channel != NULL &&
+      channel->getFunction() == SUPLA_CHANNELFNC_HVAC_THERMOSTAT_DIFFERENTIAL) {
+    return SUPLA_HVAC_ALGORITHM_ON_OFF_SETPOINT_MIDDLE |
+           SUPLA_HVAC_ALGORITHM_ON_OFF_SETPOINT_AT_MOST;
+  }
+
+  return SUPLA_HVAC_ALGORITHM_ON_OFF_SETPOINT_MIDDLE;
+}
+
 bool channelio_is_temperature_channel_function(int function) {
   return function == SUPLA_CHANNELFNC_THERMOMETER ||
          function == SUPLA_CHANNELFNC_HUMIDITYANDTEMPERATURE;
+}
+
+int channelio_get_reported_function(client_device_channel *channel) {
+  if (channel == NULL) return 0;
+
+  int function = channel->getFunction();
+
+  // Official SUPLA mobile clients still treat the differential HVAC function as
+  // unsupported. When explicitly requested in channel config, report it as a
+  // regular HVAC thermostat so the mobile UI stays usable.
+  if (function == SUPLA_CHANNELFNC_HVAC_THERMOSTAT_DIFFERENTIAL &&
+      channel->getHvacReportAsThermostat()) {
+    return SUPLA_CHANNELFNC_HVAC_THERMOSTAT;
+  }
+
+  return function;
 }
 
 void channelio_copy_general_unit(char target[SUPLA_GENERAL_PURPOSE_UNIT_SIZE],
@@ -1004,105 +1089,231 @@ void channelio_fill_hvac_config(client_device_channel *channel,
                                 TSDS_SetChannelConfig *request) {
   memset(request, 0, sizeof(TSDS_SetChannelConfig));
   request->ChannelNumber = channel->getNumber();
-  request->Func = channel->getFunction();
+  request->Func = channelio_get_reported_function(channel);
   request->ConfigType = SUPLA_CONFIG_TYPE_DEFAULT;
   request->ConfigSize = sizeof(TChannelConfig_HVAC);
 
   TChannelConfig_HVAC *config = (TChannelConfig_HVAC *)request->Config;
-  memset(config, 0, sizeof(TChannelConfig_HVAC));
+  channelio_get_hvac_config_or_default(channel, config);
 
   unsigned char mainThermometerChannelNo =
       channelio_find_hvac_main_thermometer_channel(channel);
-  config->MainThermometerChannelNo =
-      mainThermometerChannelNo > 0 ? mainThermometerChannelNo
-                                   : channel->getNumber();
-  config->AuxThermometerChannelNo = channel->getNumber();
-  config->BinarySensorChannelNo = channel->getNumber();
-  config->AvailableAlgorithms = SUPLA_HVAC_ALGORITHM_ON_OFF_SETPOINT_MIDDLE;
-  config->UsedAlgorithm = SUPLA_HVAC_ALGORITHM_ON_OFF_SETPOINT_MIDDLE;
-  config->Subfunction = channel->getHvacSubfunctionCool()
-                            ? SUPLA_HVAC_SUBFUNCTION_COOL
-                            : SUPLA_HVAC_SUBFUNCTION_HEAT;
-  config->TemperatureSetpointChangeSwitchesToManualMode = 1;
-  config->TemperatureControlType =
-      SUPLA_HVAC_TEMPERATURE_CONTROL_TYPE_ROOM_TEMPERATURE;
-  config->MinAllowedTemperatureSetpointFromLocalUI = 500;
-  config->MaxAllowedTemperatureSetpointFromLocalUI = 3500;
+  bool hvacFan = channel->getFunction() == SUPLA_CHANNELFNC_HVAC_FAN;
+  bool differential =
+      channel->getFunction() == SUPLA_CHANNELFNC_HVAC_THERMOSTAT_DIFFERENTIAL;
 
-  if (mainThermometerChannelNo > 0) {
-    config->ParameterFlags.MainThermometerChannelNoReadonly = 1;
-    config->ParameterFlags.MainThermometerChannelNoHidden = 1;
+  config->MainThermometerChannelNo = mainThermometerChannelNo;
+  config->BinarySensorChannelNo = hvacFan ? 0 : channel->getNumber();
+  config->AvailableAlgorithms =
+      hvacFan ? 0 : channelio_hvac_available_algorithms(channel);
+  if (hvacFan) {
+    config->UsedAlgorithm = SUPLA_HVAC_ALGORITHM_NOT_SET;
+  } else if (config->UsedAlgorithm == 0 ||
+             (config->UsedAlgorithm & config->AvailableAlgorithms) == 0) {
+    config->UsedAlgorithm = SUPLA_HVAC_ALGORITHM_ON_OFF_SETPOINT_MIDDLE;
   }
-  config->ParameterFlags.AuxThermometerChannelNoReadonly = 1;
-  config->ParameterFlags.AuxThermometerChannelNoHidden = 1;
+
+  if (hvacFan) {
+    config->AuxThermometerChannelNo = 0;
+    config->AuxThermometerType = SUPLA_HVAC_AUX_THERMOMETER_TYPE_DISABLED;
+    config->Subfunction = SUPLA_HVAC_SUBFUNCTION_NOT_SET;
+    config->TemperatureControlType =
+        SUPLA_HVAC_TEMPERATURE_CONTROL_TYPE_ROOM_TEMPERATURE;
+  } else if (!differential) {
+    config->AuxThermometerChannelNo = channel->getNumber();
+    config->AuxThermometerType = SUPLA_HVAC_AUX_THERMOMETER_TYPE_NOT_SET;
+    config->Subfunction = channel->getHvacSubfunctionCool()
+                              ? SUPLA_HVAC_SUBFUNCTION_COOL
+                              : SUPLA_HVAC_SUBFUNCTION_HEAT;
+    config->TemperatureControlType =
+        SUPLA_HVAC_TEMPERATURE_CONTROL_TYPE_ROOM_TEMPERATURE;
+  } else {
+    config->AuxThermometerChannelNo = 0;
+    config->AuxThermometerType = SUPLA_HVAC_AUX_THERMOMETER_TYPE_NOT_SET;
+    if (config->Subfunction == SUPLA_HVAC_SUBFUNCTION_NOT_SET) {
+      config->Subfunction = channel->getHvacSubfunctionCool()
+                                ? SUPLA_HVAC_SUBFUNCTION_COOL
+                                : SUPLA_HVAC_SUBFUNCTION_HEAT;
+    }
+    if (config->TemperatureControlType ==
+        SUPLA_HVAC_TEMPERATURE_CONTROL_TYPE_NOT_SUPPORTED) {
+      config->TemperatureControlType =
+          SUPLA_HVAC_TEMPERATURE_CONTROL_TYPE_ROOM_TEMPERATURE;
+    }
+  }
+
+  config->TemperatureSetpointChangeSwitchesToManualMode = hvacFan ? 0 : 1;
+  if (!hvacFan && config->MinAllowedTemperatureSetpointFromLocalUI == 0 &&
+      config->MaxAllowedTemperatureSetpointFromLocalUI == 0) {
+    config->MinAllowedTemperatureSetpointFromLocalUI = 500;
+    config->MaxAllowedTemperatureSetpointFromLocalUI = 3500;
+  }
+
+  memset(&config->ParameterFlags, 0, sizeof(config->ParameterFlags));
+
   config->ParameterFlags.BinarySensorChannelNoReadonly = 1;
   config->ParameterFlags.BinarySensorChannelNoHidden = 1;
-  config->ParameterFlags.AuxThermometerTypeReadonly = 1;
-  config->ParameterFlags.AuxThermometerTypeHidden = 1;
-  config->ParameterFlags.AntiFreezeAndOverheatProtectionEnabledReadonly = 1;
-  config->ParameterFlags.AntiFreezeAndOverheatProtectionEnabledHidden = 1;
-  config->ParameterFlags.UsedAlgorithmReadonly = 1;
-  config->ParameterFlags.UsedAlgorithmHidden = 1;
-  config->ParameterFlags.MinOnTimeSReadonly = 1;
-  config->ParameterFlags.MinOnTimeSHidden = 1;
-  config->ParameterFlags.MinOffTimeSReadonly = 1;
-  config->ParameterFlags.MinOffTimeSHidden = 1;
-  config->ParameterFlags.OutputValueOnErrorReadonly = 1;
-  config->ParameterFlags.OutputValueOnErrorHidden = 1;
-  config->ParameterFlags.SubfunctionReadonly = 1;
-  config->ParameterFlags.SubfunctionHidden = 1;
+
+  if (hvacFan) {
+    config->ParameterFlags.AuxThermometerChannelNoReadonly = 1;
+    config->ParameterFlags.AuxThermometerChannelNoHidden = 1;
+    config->ParameterFlags.AuxThermometerTypeReadonly = 1;
+    config->ParameterFlags.AuxThermometerTypeHidden = 1;
+    config->ParameterFlags.AntiFreezeAndOverheatProtectionEnabledReadonly = 1;
+    config->ParameterFlags.AntiFreezeAndOverheatProtectionEnabledHidden = 1;
+    config->ParameterFlags.UsedAlgorithmReadonly = 1;
+    config->ParameterFlags.UsedAlgorithmHidden = 1;
+    config->ParameterFlags.MinOnTimeSReadonly = 1;
+    config->ParameterFlags.MinOnTimeSHidden = 1;
+    config->ParameterFlags.MinOffTimeSReadonly = 1;
+    config->ParameterFlags.MinOffTimeSHidden = 1;
+    config->ParameterFlags.OutputValueOnErrorReadonly = 1;
+    config->ParameterFlags.OutputValueOnErrorHidden = 1;
+    config->ParameterFlags.SubfunctionReadonly = 1;
+    config->ParameterFlags.SubfunctionHidden = 1;
+    config->ParameterFlags.AuxMinMaxSetpointEnabledReadonly = 1;
+    config->ParameterFlags.AuxMinMaxSetpointEnabledHidden = 1;
+    config->ParameterFlags.TemperaturesFreezeProtectionReadonly = 1;
+    config->ParameterFlags.TemperaturesFreezeProtectionHidden = 1;
+    config->ParameterFlags.TemperaturesEcoReadonly = 1;
+    config->ParameterFlags.TemperaturesEcoHidden = 1;
+    config->ParameterFlags.TemperaturesComfortReadonly = 1;
+    config->ParameterFlags.TemperaturesComfortHidden = 1;
+    config->ParameterFlags.TemperaturesBoostReadonly = 1;
+    config->ParameterFlags.TemperaturesBoostHidden = 1;
+    config->ParameterFlags.TemperaturesHeatProtectionReadonly = 1;
+    config->ParameterFlags.TemperaturesHeatProtectionHidden = 1;
+    config->ParameterFlags.TemperaturesHisteresisReadonly = 1;
+    config->ParameterFlags.TemperaturesHisteresisHidden = 1;
+    config->ParameterFlags.TemperaturesBelowAlarmReadonly = 1;
+    config->ParameterFlags.TemperaturesBelowAlarmHidden = 1;
+    config->ParameterFlags.TemperaturesAboveAlarmReadonly = 1;
+    config->ParameterFlags.TemperaturesAboveAlarmHidden = 1;
+    config->ParameterFlags.TemperaturesAuxMinSetpointReadonly = 1;
+    config->ParameterFlags.TemperaturesAuxMinSetpointHidden = 1;
+    config->ParameterFlags.TemperaturesAuxMaxSetpointReadonly = 1;
+    config->ParameterFlags.TemperaturesAuxMaxSetpointHidden = 1;
+    config->ParameterFlags.TemperaturesAuxHisteresisReadonly = 1;
+    config->ParameterFlags.TemperaturesAuxHisteresisHidden = 1;
+  } else if (!differential) {
+    config->ParameterFlags.AuxThermometerChannelNoReadonly = 1;
+    config->ParameterFlags.AuxThermometerChannelNoHidden = 1;
+    config->ParameterFlags.AuxThermometerTypeReadonly = 1;
+    config->ParameterFlags.AuxThermometerTypeHidden = 1;
+    config->ParameterFlags.AntiFreezeAndOverheatProtectionEnabledReadonly = 1;
+    config->ParameterFlags.AntiFreezeAndOverheatProtectionEnabledHidden = 1;
+    config->ParameterFlags.UsedAlgorithmReadonly = 1;
+    config->ParameterFlags.UsedAlgorithmHidden = 1;
+    config->ParameterFlags.MinOnTimeSReadonly = 1;
+    config->ParameterFlags.MinOnTimeSHidden = 1;
+    config->ParameterFlags.MinOffTimeSReadonly = 1;
+    config->ParameterFlags.MinOffTimeSHidden = 1;
+    config->ParameterFlags.OutputValueOnErrorReadonly = 1;
+    config->ParameterFlags.OutputValueOnErrorHidden = 1;
+    config->ParameterFlags.SubfunctionReadonly = 1;
+    config->ParameterFlags.SubfunctionHidden = 1;
+    config->ParameterFlags.AuxMinMaxSetpointEnabledReadonly = 1;
+    config->ParameterFlags.AuxMinMaxSetpointEnabledHidden = 1;
+    config->ParameterFlags.TemperaturesFreezeProtectionReadonly = 1;
+    config->ParameterFlags.TemperaturesFreezeProtectionHidden = 1;
+    config->ParameterFlags.TemperaturesEcoReadonly = 1;
+    config->ParameterFlags.TemperaturesEcoHidden = 1;
+    config->ParameterFlags.TemperaturesComfortReadonly = 1;
+    config->ParameterFlags.TemperaturesComfortHidden = 1;
+    config->ParameterFlags.TemperaturesBoostReadonly = 1;
+    config->ParameterFlags.TemperaturesBoostHidden = 1;
+    config->ParameterFlags.TemperaturesHeatProtectionReadonly = 1;
+    config->ParameterFlags.TemperaturesHeatProtectionHidden = 1;
+    config->ParameterFlags.TemperaturesBelowAlarmReadonly = 1;
+    config->ParameterFlags.TemperaturesBelowAlarmHidden = 1;
+    config->ParameterFlags.TemperaturesAboveAlarmReadonly = 1;
+    config->ParameterFlags.TemperaturesAboveAlarmHidden = 1;
+    config->ParameterFlags.TemperaturesAuxMinSetpointReadonly = 1;
+    config->ParameterFlags.TemperaturesAuxMinSetpointHidden = 1;
+    config->ParameterFlags.TemperaturesAuxMaxSetpointReadonly = 1;
+    config->ParameterFlags.TemperaturesAuxMaxSetpointHidden = 1;
+    config->ParameterFlags.TemperaturesAuxHisteresisReadonly = 1;
+    config->ParameterFlags.TemperaturesAuxHisteresisHidden = 1;
+  } else {
+    config->ParameterFlags.AuxThermometerChannelNoReadonly = 1;
+    config->ParameterFlags.AuxThermometerChannelNoHidden = 1;
+    config->ParameterFlags.AuxThermometerTypeReadonly = 1;
+    config->ParameterFlags.AuxThermometerTypeHidden = 1;
+    config->ParameterFlags.AntiFreezeAndOverheatProtectionEnabledReadonly = 1;
+    config->ParameterFlags.AntiFreezeAndOverheatProtectionEnabledHidden = 1;
+    config->ParameterFlags.UsedAlgorithmReadonly = 1;
+    config->ParameterFlags.UsedAlgorithmHidden = 1;
+    config->ParameterFlags.MinOnTimeSReadonly = 1;
+    config->ParameterFlags.MinOnTimeSHidden = 1;
+    config->ParameterFlags.MinOffTimeSReadonly = 1;
+    config->ParameterFlags.MinOffTimeSHidden = 1;
+    config->ParameterFlags.OutputValueOnErrorReadonly = 1;
+    config->ParameterFlags.OutputValueOnErrorHidden = 1;
+    config->ParameterFlags.SubfunctionReadonly = 1;
+    config->ParameterFlags.SubfunctionHidden = 1;
+    config->ParameterFlags.AuxMinMaxSetpointEnabledReadonly = 1;
+    config->ParameterFlags.AuxMinMaxSetpointEnabledHidden = 1;
+    config->ParameterFlags.TemperaturesFreezeProtectionReadonly = 1;
+    config->ParameterFlags.TemperaturesFreezeProtectionHidden = 1;
+    config->ParameterFlags.TemperaturesEcoReadonly = 1;
+    config->ParameterFlags.TemperaturesEcoHidden = 1;
+    config->ParameterFlags.TemperaturesComfortReadonly = 1;
+    config->ParameterFlags.TemperaturesComfortHidden = 1;
+    config->ParameterFlags.TemperaturesBoostReadonly = 1;
+    config->ParameterFlags.TemperaturesBoostHidden = 1;
+    config->ParameterFlags.TemperaturesHeatProtectionReadonly = 1;
+    config->ParameterFlags.TemperaturesHeatProtectionHidden = 1;
+    config->ParameterFlags.TemperaturesHisteresisReadonly = 1;
+    config->ParameterFlags.TemperaturesHisteresisHidden = 1;
+    config->ParameterFlags.TemperaturesBelowAlarmReadonly = 1;
+    config->ParameterFlags.TemperaturesBelowAlarmHidden = 1;
+    config->ParameterFlags.TemperaturesAboveAlarmReadonly = 1;
+    config->ParameterFlags.TemperaturesAboveAlarmHidden = 1;
+    config->ParameterFlags.TemperaturesAuxMinSetpointReadonly = 1;
+    config->ParameterFlags.TemperaturesAuxMinSetpointHidden = 1;
+    config->ParameterFlags.TemperaturesAuxMaxSetpointReadonly = 1;
+    config->ParameterFlags.TemperaturesAuxMaxSetpointHidden = 1;
+    config->ParameterFlags.TemperaturesAuxHisteresisReadonly = 1;
+    config->ParameterFlags.TemperaturesAuxHisteresisHidden = 1;
+  }
+
   config->ParameterFlags.TemperatureSetpointChangeSwitchesToManualModeReadonly =
       1;
   config->ParameterFlags.TemperatureSetpointChangeSwitchesToManualModeHidden =
       1;
-  config->ParameterFlags.AuxMinMaxSetpointEnabledReadonly = 1;
-  config->ParameterFlags.AuxMinMaxSetpointEnabledHidden = 1;
   config->ParameterFlags.UseSeparateHeatCoolOutputsReadonly = 1;
   config->ParameterFlags.UseSeparateHeatCoolOutputsHidden = 1;
-  config->ParameterFlags.TemperaturesFreezeProtectionReadonly = 1;
-  config->ParameterFlags.TemperaturesFreezeProtectionHidden = 1;
-  config->ParameterFlags.TemperaturesEcoReadonly = 1;
-  config->ParameterFlags.TemperaturesEcoHidden = 1;
-  config->ParameterFlags.TemperaturesComfortReadonly = 1;
-  config->ParameterFlags.TemperaturesComfortHidden = 1;
-  config->ParameterFlags.TemperaturesBoostReadonly = 1;
-  config->ParameterFlags.TemperaturesBoostHidden = 1;
-  config->ParameterFlags.TemperaturesHeatProtectionReadonly = 1;
-  config->ParameterFlags.TemperaturesHeatProtectionHidden = 1;
-  config->ParameterFlags.TemperaturesBelowAlarmReadonly = 1;
-  config->ParameterFlags.TemperaturesBelowAlarmHidden = 1;
-  config->ParameterFlags.TemperaturesAboveAlarmReadonly = 1;
-  config->ParameterFlags.TemperaturesAboveAlarmHidden = 1;
-  config->ParameterFlags.TemperaturesAuxMinSetpointReadonly = 1;
-  config->ParameterFlags.TemperaturesAuxMinSetpointHidden = 1;
-  config->ParameterFlags.TemperaturesAuxMaxSetpointReadonly = 1;
-  config->ParameterFlags.TemperaturesAuxMaxSetpointHidden = 1;
   config->ParameterFlags.MasterThermostatChannelNoReadonly = 1;
   config->ParameterFlags.MasterThermostatChannelNoHidden = 1;
   config->ParameterFlags.HeatOrColdSourceSwitchReadonly = 1;
   config->ParameterFlags.HeatOrColdSourceSwitchHidden = 1;
   config->ParameterFlags.PumpSwitchReadonly = 1;
   config->ParameterFlags.PumpSwitchHidden = 1;
-  config->ParameterFlags.TemperaturesAuxHisteresisReadonly = 1;
-  config->ParameterFlags.TemperaturesAuxHisteresisHidden = 1;
+  if (hvacFan) {
+    return;
+  }
+  channelio_set_hvac_temperature_if_missing(&config->Temperatures,
+                                            TEMPERATURE_ROOM_MIN, 500);
+  channelio_set_hvac_temperature_if_missing(&config->Temperatures,
+                                            TEMPERATURE_ROOM_MAX, 3500);
+  channelio_set_hvac_temperature_if_missing(&config->Temperatures,
+                                            TEMPERATURE_HISTERESIS_MIN, 10);
+  channelio_set_hvac_temperature_if_missing(&config->Temperatures,
+                                            TEMPERATURE_HISTERESIS_MAX, 500);
+  channelio_set_hvac_temperature_if_missing(&config->Temperatures,
+                                            TEMPERATURE_HISTERESIS, 50);
 
-  channelio_set_hvac_temperature(&config->Temperatures, TEMPERATURE_ROOM_MIN,
-                                 500);
-  channelio_set_hvac_temperature(&config->Temperatures, TEMPERATURE_ROOM_MAX,
-                                 3500);
-  channelio_set_hvac_temperature(&config->Temperatures,
-                                 TEMPERATURE_HISTERESIS_MIN, 10);
-  channelio_set_hvac_temperature(&config->Temperatures,
-                                 TEMPERATURE_HISTERESIS_MAX, 500);
-  channelio_set_hvac_temperature(&config->Temperatures, TEMPERATURE_HISTERESIS,
-                                 50);
+  if (differential) {
+    channelio_set_hvac_temperature_if_missing(&config->Temperatures,
+                                              TEMPERATURE_AUX_HISTERESIS, 50);
+  }
 }
 
 void channelio_fill_hvac_weekly_schedule_config(client_device_channel *channel,
                                                 TSDS_SetChannelConfig *request) {
   memset(request, 0, sizeof(TSDS_SetChannelConfig));
   request->ChannelNumber = channel->getNumber();
-  request->Func = channel->getFunction();
+  request->Func = channelio_get_reported_function(channel);
   request->ConfigType = SUPLA_CONFIG_TYPE_WEEKLY_SCHEDULE;
   request->ConfigSize = sizeof(TChannelConfig_WeeklySchedule);
 
@@ -1112,9 +1323,11 @@ void channelio_fill_hvac_weekly_schedule_config(client_device_channel *channel,
 
   for (unsigned char idx = 0; idx < SUPLA_WEEKLY_SCHEDULE_PROGRAMS_MAX_SIZE;
        idx++) {
-    config->Program[idx].Mode = channel->getHvacSubfunctionCool()
-                                    ? SUPLA_HVAC_MODE_COOL
-                                    : SUPLA_HVAC_MODE_HEAT;
+    config->Program[idx].Mode =
+        channel->getFunction() == SUPLA_CHANNELFNC_HVAC_THERMOSTAT_DIFFERENTIAL
+            ? SUPLA_HVAC_MODE_HEAT_COOL
+            : (channel->getHvacSubfunctionCool() ? SUPLA_HVAC_MODE_COOL
+                                                 : SUPLA_HVAC_MODE_HEAT);
     config->Program[idx].SetpointTemperatureHeat = (20 + idx) * 100;
     config->Program[idx].SetpointTemperatureCool = (24 + idx) * 100;
   }
@@ -1207,6 +1420,16 @@ void channelio_get_hvac_weekly_schedule(client_device_channel *channel,
 }
 
 unsigned char channelio_get_hvac_default_mode(client_device_channel *channel) {
+  if (channel != NULL &&
+      channel->getFunction() == SUPLA_CHANNELFNC_HVAC_FAN) {
+    return SUPLA_HVAC_MODE_FAN_ONLY;
+  }
+
+  if (channel != NULL &&
+      channel->getFunction() == SUPLA_CHANNELFNC_HVAC_THERMOSTAT_DIFFERENTIAL) {
+    return SUPLA_HVAC_MODE_HEAT_COOL;
+  }
+
   if (channel != NULL && channel->getHvacSubfunctionCool()) {
     return SUPLA_HVAC_MODE_COOL;
   }
@@ -1475,6 +1698,8 @@ char channelio_read_from_file(client_device_channel *channel, char log_err) {
           case SUPLA_CHANNELFNC_POWERSWITCH:
           case SUPLA_CHANNELFNC_LIGHTSWITCH:
           case SUPLA_CHANNELFNC_STAIRCASETIMER:
+          case SUPLA_CHANNELFNC_PUMPSWITCH:
+          case SUPLA_CHANNELFNC_HEATORCOLDSOURCESWITCH:
           case SUPLA_CHANNELFNC_CONTROLLINGTHEDOORLOCK:
           case SUPLA_CHANNELFNC_CONTROLLINGTHEGARAGEDOOR:
           case SUPLA_CHANNELFNC_CONTROLLINGTHEGATEWAYLOCK:
@@ -1486,10 +1711,12 @@ char channelio_read_from_file(client_device_channel *channel, char log_err) {
           case SUPLA_CHANNELFNC_NOLIQUIDSENSOR:
           case SUPLA_CHANNELFNC_OPENINGSENSOR_ROLLERSHUTTER:
           case SUPLA_CHANNELFNC_OPENINGSENSOR_WINDOW:  // ver. >= 8
-          case SUPLA_CHANNELFNC_MAILSENSOR: {
+          case SUPLA_CHANNELFNC_MAILSENSOR:
+          {
             tmp_value[0] = val1 == 1 ? 1 : 0;
           } break;
-          case SUPLA_CHANNELFNC_CONTROLLINGTHEROLLERSHUTTER: {
+          case SUPLA_CHANNELFNC_CONTROLLINGTHEROLLERSHUTTER:
+          case SUPLA_CHANNELFNC_CONTROLLINGTHEFACADEBLIND: {
             int shutter = static_cast<int>(val1);
 
             if (shutter < 0) shutter = 0;
@@ -1605,7 +1832,9 @@ char channelio_read_from_file(client_device_channel *channel, char log_err) {
               channel->getValue(tmp_value);
             }
           } break;
-          case SUPLA_CHANNELFNC_HVAC_THERMOSTAT: {
+          case SUPLA_CHANNELFNC_HVAC_FAN:
+          case SUPLA_CHANNELFNC_HVAC_THERMOSTAT:
+          case SUPLA_CHANNELFNC_HVAC_THERMOSTAT_DIFFERENTIAL: {
             int mode;
             int power;
             int fan;
@@ -1615,11 +1844,30 @@ char channelio_read_from_file(client_device_channel *channel, char log_err) {
             read_result =
                 file_read_ac_data(channel->getFileName().c_str(), &mode, &power,
                                   &preset, &measured, &fan);
-            (void)mode;
-            (void)measured;
             (void)fan;
 
-            if (read_result == 1) {
+            if (read_result == 1 &&
+                channel->getFunction() == SUPLA_CHANNELFNC_HVAC_FAN) {
+              unsigned char hvacMode =
+                  power == 1 ? SUPLA_HVAC_MODE_FAN_ONLY : SUPLA_HVAC_MODE_OFF;
+
+              if (mode == SUPLA_HVAC_MODE_OFF ||
+                  mode == SUPLA_HVAC_MODE_FAN_ONLY) {
+                hvacMode = static_cast<unsigned char>(mode);
+              }
+
+              channel->updateHvacFanState(true, power == 1, true, hvacMode);
+              channel->getValue(tmp_value);
+            } else if (read_result == 1 &&
+                channel->getFunction() ==
+                    SUPLA_CHANNELFNC_HVAC_THERMOSTAT_DIFFERENTIAL) {
+              channel->updateHvacDifferentialState(
+                  true, power == 1, false, SUPLA_HVAC_MODE_NOT_SET, true,
+                  preset, true, preset, false, false, false, false);
+              channel->getValue(tmp_value);
+            } else if (read_result == 1) {
+              (void)mode;
+              (void)measured;
               channel->updateHvacState(true, power == 1, true, preset);
               channel->getValue(tmp_value);
             }
@@ -2030,6 +2278,22 @@ void channelio_set_mqtt_preset_temperature_topic_in(unsigned char number,
 
   if (channel) channel->setPresetTemperatureTopic(value);
 }
+void channelio_set_mqtt_preset_temperature_high_topic_in(unsigned char number,
+                                                         const char *value) {
+  if (channels == NULL) return;
+
+  client_device_channel *channel = channels->find_channel(number);
+
+  if (channel) channel->setPresetTemperatureHighTopic(value);
+}
+void channelio_set_mqtt_action_topic_in(unsigned char number,
+                                        const char *value) {
+  if (channels == NULL) return;
+
+  client_device_channel *channel = channels->find_channel(number);
+
+  if (channel) channel->setActionTopic(value);
+}
 void channelio_set_mqtt_position_topic_out(unsigned char number,
                                            const char *value) {
   if (channels == NULL) return;
@@ -2045,6 +2309,14 @@ void channelio_set_mqtt_preset_temperature_topic_out(unsigned char number,
   client_device_channel *channel = channels->find_channel(number);
 
   if (channel) channel->setPresetTemperatureCommandTopic(value);
+}
+void channelio_set_mqtt_preset_temperature_high_topic_out(
+    unsigned char number, const char *value) {
+  if (channels == NULL) return;
+
+  client_device_channel *channel = channels->find_channel(number);
+
+  if (channel) channel->setPresetTemperatureHighCommandTopic(value);
 }
 void channelio_set_mqtt_retain(unsigned char number, unsigned char value) {
   if (channels == NULL) return;
@@ -2078,6 +2350,15 @@ void channelio_set_esphome_rgbw(unsigned char number, unsigned char value) {
   if (channel) channel->setEsphomeRgbw(value);
 }
 
+void channelio_set_hvac_report_as_thermostat(unsigned char number,
+                                             unsigned char value) {
+  if (channels == NULL) return;
+
+  client_device_channel *channel = channels->find_channel(number);
+
+  if (channel) channel->setHvacReportAsThermostat(value != 0);
+}
+
 void channelio_set_hvac_subfunction(unsigned char number, const char *value) {
   if (channels == NULL || value == NULL) return;
 
@@ -2097,6 +2378,153 @@ void channelio_set_hvac_main_thermometer_channel(unsigned char number,
   if (channel) {
     channel->setHvacMainThermometerChannelNo(channelNo);
   }
+}
+
+void channelio_set_hvac_aux_thermometer_channel(unsigned char number,
+                                                unsigned char channelNo) {
+  if (channels == NULL) return;
+
+  client_device_channel *channel = channels->find_channel(number);
+  if (channel == NULL) return;
+
+  TChannelConfig_HVAC config;
+  channelio_get_hvac_config_or_default(channel, &config);
+  config.AuxThermometerChannelNo = channelNo;
+  channel->setHvacConfig(&config);
+}
+
+void channelio_set_hvac_aux_thermometer_type(unsigned char number,
+                                             const char *value) {
+  if (channels == NULL || value == NULL) return;
+
+  client_device_channel *channel = channels->find_channel(number);
+  if (channel == NULL) return;
+
+  unsigned char auxType = SUPLA_HVAC_AUX_THERMOMETER_TYPE_NOT_SET;
+
+  if (strcasecmp(value, "disabled") == 0) {
+    auxType = SUPLA_HVAC_AUX_THERMOMETER_TYPE_DISABLED;
+  } else if (strcasecmp(value, "floor") == 0) {
+    auxType = SUPLA_HVAC_AUX_THERMOMETER_TYPE_FLOOR;
+  } else if (strcasecmp(value, "water") == 0) {
+    auxType = SUPLA_HVAC_AUX_THERMOMETER_TYPE_WATER;
+  } else if (strcasecmp(value, "generic_heater") == 0 ||
+             strcasecmp(value, "heater") == 0) {
+    auxType = SUPLA_HVAC_AUX_THERMOMETER_TYPE_GENERIC_HEATER;
+  } else if (strcasecmp(value, "generic_cooler") == 0 ||
+             strcasecmp(value, "cooler") == 0) {
+    auxType = SUPLA_HVAC_AUX_THERMOMETER_TYPE_GENERIC_COOLER;
+  }
+
+  TChannelConfig_HVAC config;
+  channelio_get_hvac_config_or_default(channel, &config);
+  config.AuxThermometerType = auxType;
+  channel->setHvacConfig(&config);
+}
+
+void channelio_set_hvac_algorithm(unsigned char number, const char *value) {
+  if (channels == NULL || value == NULL) return;
+
+  client_device_channel *channel = channels->find_channel(number);
+  if (channel == NULL) return;
+
+  unsigned _supla_int16_t algorithm = SUPLA_HVAC_ALGORITHM_NOT_SET;
+
+  if (strcasecmp(value, "middle") == 0 ||
+      strcasecmp(value, "on_off_setpoint_middle") == 0) {
+    algorithm = SUPLA_HVAC_ALGORITHM_ON_OFF_SETPOINT_MIDDLE;
+  } else if (strcasecmp(value, "at_most") == 0 ||
+             strcasecmp(value, "on_off_setpoint_at_most") == 0) {
+    algorithm = SUPLA_HVAC_ALGORITHM_ON_OFF_SETPOINT_AT_MOST;
+  } else if (strcasecmp(value, "pid") == 0) {
+    algorithm = SUPLA_HVAC_ALGORITHM_PID;
+  }
+
+  if (algorithm == SUPLA_HVAC_ALGORITHM_NOT_SET) return;
+
+  TChannelConfig_HVAC config;
+  channelio_get_hvac_config_or_default(channel, &config);
+  config.UsedAlgorithm = algorithm;
+  channel->setHvacConfig(&config);
+}
+
+void channelio_set_hvac_min_on_time_s(unsigned char number,
+                                      unsigned short value) {
+  if (channels == NULL) return;
+
+  client_device_channel *channel = channels->find_channel(number);
+  if (channel == NULL) return;
+
+  TChannelConfig_HVAC config;
+  channelio_get_hvac_config_or_default(channel, &config);
+  config.MinOnTimeS = value;
+  channel->setHvacConfig(&config);
+}
+
+void channelio_set_hvac_min_off_time_s(unsigned char number,
+                                       unsigned short value) {
+  if (channels == NULL) return;
+
+  client_device_channel *channel = channels->find_channel(number);
+  if (channel == NULL) return;
+
+  TChannelConfig_HVAC config;
+  channelio_get_hvac_config_or_default(channel, &config);
+  config.MinOffTimeS = value;
+  channel->setHvacConfig(&config);
+}
+
+void channelio_set_hvac_output_value_on_error(unsigned char number,
+                                              signed char value) {
+  if (channels == NULL) return;
+
+  client_device_channel *channel = channels->find_channel(number);
+  if (channel == NULL) return;
+
+  TChannelConfig_HVAC config;
+  channelio_get_hvac_config_or_default(channel, &config);
+  config.OutputValueOnError = value;
+  channel->setHvacConfig(&config);
+}
+
+void channelio_set_hvac_antifreeze_overheat_protection(
+    unsigned char number, unsigned char value) {
+  if (channels == NULL) return;
+
+  client_device_channel *channel = channels->find_channel(number);
+  if (channel == NULL) return;
+
+  TChannelConfig_HVAC config;
+  channelio_get_hvac_config_or_default(channel, &config);
+  config.AntiFreezeAndOverheatProtectionEnabled = value ? 1 : 0;
+  channel->setHvacConfig(&config);
+}
+
+void channelio_set_hvac_aux_minmax_setpoint_enabled(unsigned char number,
+                                                    unsigned char value) {
+  if (channels == NULL) return;
+
+  client_device_channel *channel = channels->find_channel(number);
+  if (channel == NULL) return;
+
+  TChannelConfig_HVAC config;
+  channelio_get_hvac_config_or_default(channel, &config);
+  config.AuxMinMaxSetpointEnabled = value ? 1 : 0;
+  channel->setHvacConfig(&config);
+}
+
+void channelio_set_hvac_temperature_cfg(unsigned char number,
+                                        unsigned int key,
+                                        _supla_int16_t value) {
+  if (channels == NULL) return;
+
+  client_device_channel *channel = channels->find_channel(number);
+  if (channel == NULL) return;
+
+  TChannelConfig_HVAC config;
+  channelio_get_hvac_config_or_default(channel, &config);
+  channelio_set_hvac_temperature(&config.Temperatures, key, value);
+  channel->setHvacConfig(&config);
 }
 
 void channelio_set_general_value_divider(unsigned char number,
@@ -2244,6 +2672,14 @@ void channelio_set_mqtt_preset_temperature_template_out(unsigned char number,
 
   if (channel) channel->setPresetTemperatureCommandTemplate(value);
 }
+void channelio_set_mqtt_preset_temperature_high_template_out(
+    unsigned char number, const char *value) {
+  if (channels == NULL) return;
+
+  client_device_channel *channel = channels->find_channel(number);
+
+  if (channel) channel->setPresetTemperatureHighCommandTemplate(value);
+}
 
 void channelio_w1_iterate(void) {
   int a;
@@ -2271,7 +2707,26 @@ void channelio_w1_iterate(void) {
       };
     };
 
-    if (channel->getFunction() == SUPLA_CHANNELFNC_HVAC_THERMOSTAT) {
+    if (channelio_is_impulse_function(channel->getFunction())) {
+      unsigned char trackingIndex =
+          channelio_impulse_index(channel->getNumber());
+
+      if (trackingIndex > 0 && runtime_impulse_end_ms[trackingIndex] > 0 &&
+          channelio_now_ms() >= runtime_impulse_end_ms[trackingIndex]) {
+        char offValue[SUPLA_CHANNELVALUE_SIZE];
+        memset(offValue, 0, sizeof(offValue));
+
+        channelio_clear_impulse_timeout(channel->getNumber());
+        channel->setValue(offValue);
+        channelio_raise_execute_command(channel);
+        channelio_raise_mqtt_valuechannged(channel);
+        channelio_raise_valuechanged(channel);
+      }
+    }
+
+    if (channel->getFunction() == SUPLA_CHANNELFNC_HVAC_THERMOSTAT ||
+        channel->getFunction() ==
+            SUPLA_CHANNELFNC_HVAC_THERMOSTAT_DIFFERENTIAL) {
       if (channelio_iterate_hvac_countdown(channel)) {
         continue;
       }
@@ -2344,7 +2799,8 @@ void channelio_get_value(unsigned char number,
 void channelio_raise_mqtt_valuechannged(client_device_channel *channel) {
   if (channel->getCommandTopic().length() == 0 &&
       channel->getPositionCommandTopic().length() == 0 &&
-      channel->getPresetTemperatureCommandTopic().length() == 0)
+      channel->getPresetTemperatureCommandTopic().length() == 0 &&
+      channel->getPresetTemperatureHighCommandTopic().length() == 0)
     return;
   publish_mqtt_message_for_channel(channel);
 }
@@ -2355,10 +2811,28 @@ void channelio_normalize_hvac_value(client_device_channel *channel,
 
   hvacValue->Flags &= ~(SUPLA_HVAC_VALUE_FLAG_HEATING |
                         SUPLA_HVAC_VALUE_FLAG_COOLING |
-                        SUPLA_HVAC_VALUE_FLAG_COOL);
+                        SUPLA_HVAC_VALUE_FLAG_COOL |
+                        SUPLA_HVAC_VALUE_FLAG_FAN_ENABLED);
 
   if (channel->getHvacSubfunctionCool()) {
     hvacValue->Flags |= SUPLA_HVAC_VALUE_FLAG_COOL;
+  }
+
+  if (channel->getFunction() == SUPLA_CHANNELFNC_HVAC_FAN) {
+    hvacValue->Flags &= ~(SUPLA_HVAC_VALUE_FLAG_SETPOINT_TEMP_HEAT_SET |
+                          SUPLA_HVAC_VALUE_FLAG_SETPOINT_TEMP_COOL_SET);
+    hvacValue->SetpointTemperatureHeat = 0;
+    hvacValue->SetpointTemperatureCool = 0;
+
+    if (hvacValue->Mode == SUPLA_HVAC_MODE_OFF) {
+      hvacValue->IsOn = 0;
+    } else {
+      hvacValue->Mode = SUPLA_HVAC_MODE_FAN_ONLY;
+      hvacValue->IsOn = 1;
+      hvacValue->Flags |= SUPLA_HVAC_VALUE_FLAG_FAN_ENABLED;
+    }
+
+    return;
   }
 
   if (hvacValue->Mode == SUPLA_HVAC_MODE_OFF) {
@@ -2603,6 +3077,7 @@ char channelio_set_hvac_value(client_device_channel *channel,
       case SUPLA_HVAC_MODE_HEAT:
       case SUPLA_HVAC_MODE_COOL:
       case SUPLA_HVAC_MODE_HEAT_COOL:
+      case SUPLA_HVAC_MODE_FAN_ONLY:
         nextValue.Flags &= ~SUPLA_HVAC_VALUE_FLAG_WEEKLY_SCHEDULE;
         nextValue.Flags &= ~SUPLA_HVAC_VALUE_FLAG_WEEKLY_SCHEDULE_TEMPORAL_OVERRIDE;
         nextValue.Mode = requestValue.Mode;
@@ -2705,8 +3180,16 @@ char channelio_set_value(unsigned char number,
   client_device_channel *channel = channels->find_channel(number);
 
   if (channel) {
-    if (channel->getFunction() == SUPLA_CHANNELFNC_HVAC_THERMOSTAT) {
+    if (channel->getFunction() == SUPLA_CHANNELFNC_HVAC_FAN ||
+        channel->getFunction() == SUPLA_CHANNELFNC_HVAC_THERMOSTAT ||
+        channel->getFunction() ==
+            SUPLA_CHANNELFNC_HVAC_THERMOSTAT_DIFFERENTIAL) {
       return channelio_set_hvac_value(channel, value, time_ms);
+    }
+
+    bool impulseFunction = channelio_is_impulse_function(channel->getFunction());
+    if (impulseFunction && value[0] == 0) {
+      channelio_clear_impulse_timeout(channel->getNumber());
     }
 
     char previousValue[SUPLA_CHANNELVALUE_SIZE];
@@ -2844,7 +3327,9 @@ char channelio_set_value(unsigned char number,
     channelio_raise_mqtt_valuechannged(channel);
 
     if (channel->getFunction() ==
-        SUPLA_CHANNELFNC_CONTROLLINGTHEROLLERSHUTTER) {
+            SUPLA_CHANNELFNC_CONTROLLINGTHEROLLERSHUTTER ||
+        channel->getFunction() ==
+            SUPLA_CHANNELFNC_CONTROLLINGTHEFACADEBLIND) {
       // For roller shutters, values coming from SUPLA are commands
       // (for example 1/2 or 10..110), not the actual position state.
       // Restore the last known position and wait for the real state to come
@@ -2855,6 +3340,13 @@ char channelio_set_value(unsigned char number,
 
     /* report value back to SUPLA server */
     channelio_raise_valuechanged(channel);
+
+    if (impulseFunction && value[0] > 0 && time_ms > 0) {
+      unsigned char trackingIndex = channelio_impulse_index(channel->getNumber());
+      if (trackingIndex > 0) {
+        runtime_impulse_end_ms[trackingIndex] = channelio_now_ms() + time_ms;
+      }
+    }
 
     return true;
   };
@@ -2927,11 +3419,30 @@ unsigned char channelio_required_proto_version(void) {
 
     if (channel->getFunction() ==
         SUPLA_CHANNELFNC_GENERAL_PURPOSE_MEASUREMENT) {
-      return 23;
+      if (requiredProtoVersion < 23) {
+        requiredProtoVersion = 23;
+      }
     }
 
-    if (channel->getFunction() == SUPLA_CHANNELFNC_HVAC_THERMOSTAT) {
-      requiredProtoVersion = 21;
+    if (channel->getFunction() ==
+        SUPLA_CHANNELFNC_CONTROLLINGTHEFACADEBLIND) {
+      requiredProtoVersion = 24;
+    }
+
+    if (channel->getFunction() == SUPLA_CHANNELFNC_HVAC_FAN ||
+        channel->getFunction() == SUPLA_CHANNELFNC_HVAC_THERMOSTAT ||
+        channel->getFunction() ==
+            SUPLA_CHANNELFNC_HVAC_THERMOSTAT_DIFFERENTIAL) {
+      if (requiredProtoVersion < 21) {
+        requiredProtoVersion = 21;
+      }
+    }
+
+    if (channel->getFunction() == SUPLA_CHANNELFNC_PUMPSWITCH ||
+        channel->getFunction() == SUPLA_CHANNELFNC_HEATORCOLDSOURCESWITCH) {
+      if (requiredProtoVersion < 25) {
+        requiredProtoVersion = 25;
+      }
     }
   }
 
@@ -2976,7 +3487,10 @@ void channelio_send_initial_configs_if_needed(void *srpc) {
       continue;
     }
 
-    if (channel->getFunction() == SUPLA_CHANNELFNC_HVAC_THERMOSTAT) {
+    if (channel->getFunction() == SUPLA_CHANNELFNC_HVAC_THERMOSTAT ||
+        channel->getFunction() ==
+            SUPLA_CHANNELFNC_HVAC_THERMOSTAT_DIFFERENTIAL ||
+        channel->getFunction() == SUPLA_CHANNELFNC_HVAC_FAN) {
       hasHvacChannel = true;
 
       if (!runtime_default_config_received[trackingIndex] &&
@@ -2985,7 +3499,8 @@ void channelio_send_initial_configs_if_needed(void *srpc) {
         initial_default_config_sent[trackingIndex] = 1;
       }
 
-      if (!runtime_weekly_config_received[trackingIndex] &&
+      if (channel->getFunction() != SUPLA_CHANNELFNC_HVAC_FAN &&
+          !runtime_weekly_config_received[trackingIndex] &&
           !initial_weekly_config_sent[trackingIndex] &&
           channelio_send_initial_hvac_weekly_schedule_config(channel, srpc)) {
         initial_weekly_config_sent[trackingIndex] = 1;
@@ -3055,7 +3570,10 @@ char channelio_handle_runtime_channel_config(
     return SUPLA_CONFIG_RESULT_TYPE_NOT_SUPPORTED;
   }
 
-  if (channel->getFunction() != SUPLA_CHANNELFNC_HVAC_THERMOSTAT) {
+  if (channel->getFunction() != SUPLA_CHANNELFNC_HVAC_THERMOSTAT &&
+      channel->getFunction() !=
+          SUPLA_CHANNELFNC_HVAC_THERMOSTAT_DIFFERENTIAL &&
+      channel->getFunction() != SUPLA_CHANNELFNC_HVAC_FAN) {
     return SUPLA_CONFIG_RESULT_FUNCTION_NOT_SUPPORTED;
   }
 
@@ -3066,6 +3584,8 @@ char channelio_handle_runtime_channel_config(
       }
 
       TChannelConfig_HVAC *config = (TChannelConfig_HVAC *)request->Config;
+
+      channel->setHvacConfig(config);
 
       if (config->MainThermometerChannelNo > 0 &&
           config->MainThermometerChannelNo != channel->getNumber()) {
@@ -3085,13 +3605,18 @@ char channelio_handle_runtime_channel_config(
         runtime_default_config_received[trackingIndex] = 1;
       }
 
-      channelio_apply_current_hvac_weekly_schedule(channel, 1, 1);
+      if (channel->getFunction() != SUPLA_CHANNELFNC_HVAC_FAN) {
+        channelio_apply_current_hvac_weekly_schedule(channel, 1, 1);
+      }
       supla_log(LOG_DEBUG, "applied runtime HVAC config for channel %d",
                 channel->getNumber());
       return SUPLA_CONFIG_RESULT_TRUE;
     }
     case SUPLA_CONFIG_TYPE_WEEKLY_SCHEDULE:
     case SUPLA_CONFIG_TYPE_ALT_WEEKLY_SCHEDULE:
+      if (channel->getFunction() == SUPLA_CHANNELFNC_HVAC_FAN) {
+        return SUPLA_CONFIG_RESULT_TYPE_NOT_SUPPORTED;
+      }
       if (request->ConfigSize < sizeof(TChannelConfig_WeeklySchedule)) {
         return SUPLA_CONFIG_RESULT_DATA_ERROR;
       }
@@ -3138,7 +3663,7 @@ void channelio_channels_to_srd_b(unsigned char *channel_count,
     if (channel) {
       chnl[a].Number = channel->getNumber();
       chnl[a].Type = channel->getType();
-      chnl[a].Default = channel->getFunction();
+      chnl[a].Default = channelio_get_reported_function(channel);
       channel->getValue(chnl[a].value);
     }
   }
@@ -3155,12 +3680,17 @@ void channelio_channels_to_srd_c(unsigned char *channel_count,
     if (channel) {
       chnl[a].Number = channel->getNumber();
       chnl[a].Type = channel->getType();
-      chnl[a].Default = channel->getFunction();
+      chnl[a].Default = channelio_get_reported_function(channel);
 
-      if (channel->getFunction() == SUPLA_CHANNELFNC_HVAC_THERMOSTAT) {
-        chnl[a].Flags |= SUPLA_CHANNEL_FLAG_RUNTIME_CHANNEL_CONFIG_UPDATE |
-                         SUPLA_CHANNEL_FLAG_WEEKLY_SCHEDULE |
-                         SUPLA_CHANNEL_FLAG_COUNTDOWN_TIMER_SUPPORTED;
+      if (channel->getFunction() == SUPLA_CHANNELFNC_HVAC_THERMOSTAT ||
+          channel->getFunction() ==
+              SUPLA_CHANNELFNC_HVAC_THERMOSTAT_DIFFERENTIAL ||
+          channel->getFunction() == SUPLA_CHANNELFNC_HVAC_FAN) {
+        chnl[a].Flags |= SUPLA_CHANNEL_FLAG_RUNTIME_CHANNEL_CONFIG_UPDATE;
+        if (channel->getFunction() != SUPLA_CHANNELFNC_HVAC_FAN) {
+          chnl[a].Flags |= SUPLA_CHANNEL_FLAG_WEEKLY_SCHEDULE |
+                           SUPLA_CHANNEL_FLAG_COUNTDOWN_TIMER_SUPPORTED;
+        }
       } else if (channel->getFunction() ==
                  SUPLA_CHANNELFNC_GENERAL_PURPOSE_MEASUREMENT) {
         chnl[a].Flags |= SUPLA_CHANNEL_FLAG_RUNTIME_CHANNEL_CONFIG_UPDATE;

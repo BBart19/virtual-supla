@@ -56,18 +56,20 @@ client_name=supla-virtual-device
 # WINDOWSENSOR
 # MAILSENSOR
 # ROLLERSHUTTER
+# FACADEBLIND
+# HVAC_FAN / FAN
 # ROLLERSHUTTERSENSOR
 # DIMMER
-# RGBLIGHTNING / RGBLIGHTING
+# RGBLIGHTING
 # DIMMERANDRGB
 # IC_ELECTRICITY_METER
 # IC_GAS_METER
 # IC_WATER_METER
 # ELECTRICITY_METER
-# VALVE_OPENCLOSE
 # THERMOSTAT
 # THERMOSTAT_HEATPOL_HOMEPLUS / THERMOSTAT_HEATPOL / THERMOSTAT_HEATPOOL
 # HVAC_THERMOSTAT
+# HVAC_THERMOSTAT_DIFFERENTIAL / THERMOSTAT_DIFFERENTIAL / HVAC_BANG_BANG / BANG_BANG
 #
 # supported channel type names:
 #
@@ -113,6 +115,8 @@ client_name=supla-virtual-device
 # command_template=
 # command_template_on=
 # command_template_off=
+# command_payload_on=
+# command_payload_off=
 # id_Template=
 # id_Value=
 #
@@ -144,6 +148,16 @@ client_name=supla-virtual-device
 # ROLLERSHUTTER:
 # position_command_topic=
 # esphome_cover=0/1
+# FACADEBLIND:
+# position_command_topic=
+# esphome_cover=0/1
+# HVAC_FAN / FAN:
+#   state_topic=
+#   command_topic=
+#   payload_on=fan_only
+#   payload_off=off
+#   command_template_on=fan_only
+#   command_template_off=off
 #
 # THERMOSTAT_HEATPOL_HOMEPLUS:
 # measured_temperature_topic=
@@ -157,6 +171,16 @@ client_name=supla-virtual-device
 # preset_temperature_topic=
 # preset_temperature_command_topic=
 # preset_temperature_command_template=
+# HVAC_THERMOSTAT_DIFFERENTIAL:
+# main_thermometer_channel_no=
+# target_temperature_low_topic=
+# target_temperature_low_command_topic=
+# target_temperature_low_command_template=
+# target_temperature_high_topic=
+# target_temperature_high_command_topic=
+# target_temperature_high_command_template=
+# current_temperature_topic=
+# action_topic=
 #
 # GENERAL:
 # value_divider=
@@ -245,9 +269,10 @@ min_interval_sec=300
 function=POWERSWITCH
 state_topic=relays/switch/0/state
 command_topic=relays/switch/0/command
-command_template=$value$
 payload_on=1
 payload_off=0
+command_payload_on=1
+command_payload_off=0
 retain=0
 
 # temperature and humidity in one payload, e.g. "25.4 78"
@@ -266,6 +291,26 @@ payload_value=/on
 payload_on=true
 payload_off=false
 
+[CHANNEL_40]
+function=PUMP_SWITCH
+# HVAC helper relay in SUPLA; for guaranteed standalone manual control use POWERSWITCH
+state_topic=switch/pump/state
+command_topic=switch/pump/command
+payload_on=ON
+payload_off=OFF
+command_payload_on=START
+command_payload_off=STOP
+
+[CHANNEL_41]
+function=HEAT_OR_COLD_SOURCE_SWITCH
+# HVAC helper relay in SUPLA; for guaranteed standalone manual control use POWERSWITCH
+state_topic=switch/heat_or_cold_source/state
+command_topic=switch/heat_or_cold_source/command
+payload_on=ON
+payload_off=OFF
+command_payload_on=HEAT
+command_payload_off=COOL
+
 [CHANNEL_5]
 function=WINDSENSOR
 state_topic=sensors/wind/0/state
@@ -279,6 +324,25 @@ esphome_cover=1
 command_topic=esphome/device/cover/shutter/command
 position_command_topic=esphome/device/cover/shutter/position/command
 # command_template=$value$
+
+[CHANNEL_60]
+function=FACADEBLIND
+state_topic=esphome/device/cover/facadeblind/position/state
+invert_state=1
+retain=0
+esphome_cover=1
+command_topic=esphome/device/cover/facadeblind/command
+position_command_topic=esphome/device/cover/facadeblind/position/command
+# command_template=$value$
+
+[CHANNEL_61]
+function=HVAC_FAN
+state_topic=esphome/device/climate/fan/mode/state
+payload_on=fan_only
+payload_off=off
+command_topic=esphome/device/climate/fan/mode/command
+command_template_on=fan_only
+command_template_off=off
 
 [CHANNEL_7]
 function=THERMOSTAT_HEATPOL_HOMEPLUS
@@ -311,8 +375,33 @@ preset_temperature_command_template=$value$
 function=TEMPERATURE
 state_topic=esphome/device/climate/room/current_temperature/state
 
+[CHANNEL_62]
+function=HVAC_THERMOSTAT_DIFFERENTIAL
+main_thermometer_channel_no=63
+# report_as_hvac_thermostat=1
+state_topic=esphome/device/climate/differential/mode/state
+payload_on=heat_cool
+payload_off=off
+command_topic=esphome/device/climate/differential/mode/command
+command_template_on=heat_cool
+command_template_off=off
+target_temperature_low_topic=esphome/device/climate/differential/target_temperature_low/state
+target_temperature_low_command_topic=esphome/device/climate/differential/target_temperature_low/command
+target_temperature_low_command_template=$value$
+target_temperature_high_topic=esphome/device/climate/differential/target_temperature_high/state
+target_temperature_high_command_topic=esphome/device/climate/differential/target_temperature_high/command
+target_temperature_high_command_template=$value$
+current_temperature_topic=esphome/device/climate/differential/current_temperature/state
+action_topic=esphome/device/climate/differential/action/state
+
+[CHANNEL_63]
+function=TEMPERATURE
+state_topic=esphome/device/climate/differential/current_temperature/state
+
 [CHANNEL_10]
 function=GENERAL
+# official SUPLA name also works:
+# function=GENERAL_PURPOSE_MEASUREMENT
 state_topic=sensors/general/0/state
 value_divider=1
 value_multiplier=1
@@ -341,7 +430,7 @@ payload_off=OFF
 retain=0
 
 [CHANNEL_13]
-function=RGBLIGHTNING
+function=RGBLIGHTING
 state_topic=lights/rgb/0/state
 color_brightness_topic=lights/rgb/0/color_brightness/state
 color_topic=lights/rgb/0/color/state
@@ -449,14 +538,6 @@ state_topic=meters/gas/main/state
 function=IC_WATER_METER
 state_topic=meters/water/main/state
 
-[CHANNEL_21]
-function=VALVE_OPENCLOSE
-state_topic=valves/main/state
-command_topic=valves/main/command
-payload_on=OPEN
-payload_off=CLOSE
-command_template=$value$
-
 [CHANNEL_22]
 function=LIGHTSWITCH
 state_topic=relays/jsonswitch/state
@@ -543,7 +624,8 @@ state_topic=actuators/gate/0/state
 command_topic=actuators/gate/0/command
 payload_on=OPEN
 payload_off=CLOSE
-command_template=$value$
+command_payload_on=OPEN
+command_payload_off=CLOSE
 
 [CHANNEL_37]
 function=GATEWAYLOCK
@@ -551,7 +633,8 @@ state_topic=actuators/gatewaylock/0/state
 command_topic=actuators/gatewaylock/0/command
 payload_on=OPEN
 payload_off=CLOSE
-command_template=$value$
+command_payload_on=OPEN
+command_payload_off=CLOSE
 
 [CHANNEL_38]
 function=GARAGEDOOR
@@ -559,7 +642,8 @@ state_topic=actuators/garage_door/0/state
 command_topic=actuators/garage_door/0/command
 payload_on=OPEN
 payload_off=CLOSE
-command_template=$value$
+command_payload_on=OPEN
+command_payload_off=CLOSE
 
 [CHANNEL_39]
 function=DOORLOCK
@@ -567,7 +651,8 @@ state_topic=actuators/doorlock/0/state
 command_topic=actuators/doorlock/0/command
 payload_on=OPEN
 payload_off=CLOSE
-command_template=$value$
+command_payload_on=OPEN
+command_payload_off=CLOSE
 
 [CHANNEL_40]
 function=STAIRCASETIMER

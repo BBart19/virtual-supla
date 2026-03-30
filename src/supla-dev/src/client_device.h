@@ -71,13 +71,17 @@ class client_device_channel {
   std::string colorTopic;
   std::string measuredTemperatureTopic;
   std::string presetTemperatureTopic;
+  std::string presetTemperatureHighTopic;
+  std::string actionTopic;
   std::string positionCommandTopic;
   std::string presetTemperatureCommandTopic;
+  std::string presetTemperatureHighCommandTopic;
   std::string stateTemplate;
   std::string commandTemplate;
   std::string commandTemplateOn;
   std::string commandTemplateOff;
   std::string presetTemperatureCommandTemplate;
+  std::string presetTemperatureHighCommandTemplate;
   std::string execute;
   std::string executeOn;
   std::string executeOff;
@@ -93,9 +97,11 @@ class client_device_channel {
   bool esphomeCover;
   bool esphomeRgbw;
   bool hvacSubfunctionCool;
+  bool hvacReportAsThermostat;
   bool generalNoSpaceBeforeValue;
   bool generalNoSpaceAfterValue;
   bool generalKeepHistory;
+  bool hvacConfigInitialized;
   unsigned char hvacMainThermometerChannelNo;
   unsigned char generalValuePrecision;
   unsigned char generalChartType;
@@ -114,6 +120,7 @@ class client_device_channel {
   struct timeval last;
   char value[SUPLA_CHANNELVALUE_SIZE];
   TSuplaChannelExtendedValue *extendedValue;
+  TChannelConfig_HVAC hvacConfig;
 
   bool isSensorNONC(void);
 
@@ -156,13 +163,17 @@ class client_device_channel {
   std::string getColorTopic(void);
   std::string getMeasuredTemperatureTopic(void);
   std::string getPresetTemperatureTopic(void);
+  std::string getPresetTemperatureHighTopic(void);
+  std::string getActionTopic(void);
   std::string getPositionCommandTopic(void);
   std::string getPresetTemperatureCommandTopic(void);
+  std::string getPresetTemperatureHighCommandTopic(void);
   std::string getStateTemplate(void);
   std::string getCommandTemplate(void);
   std::string getCommandTemplateOn(void);
   std::string getCommandTemplateOff(void);
   std::string getPresetTemperatureCommandTemplate(void);
+  std::string getPresetTemperatureHighCommandTemplate(void);
   std::string getExecute(void);
   std::string getExecuteOn(void);
   std::string getExecuteOff(void);
@@ -173,7 +184,9 @@ class client_device_channel {
   bool getEsphomeCover(void);
   bool getEsphomeRgbw(void);
   bool getHvacSubfunctionCool(void);
+  bool getHvacReportAsThermostat(void);
   unsigned char getHvacMainThermometerChannelNo(void);
+  bool getHvacConfig(TChannelConfig_HVAC *hvacConfig);
   _supla_int_t getGeneralValueDivider(void);
   _supla_int_t getGeneralValueMultiplier(void);
   _supla_int64_t getGeneralValueAdded(void);
@@ -224,15 +237,21 @@ class client_device_channel {
   void setColorTopic(const char *colorTopic);
   void setMeasuredTemperatureTopic(const char *measuredTemperatureTopic);
   void setPresetTemperatureTopic(const char *presetTemperatureTopic);
+  void setPresetTemperatureHighTopic(const char *presetTemperatureHighTopic);
+  void setActionTopic(const char *actionTopic);
   void setPositionCommandTopic(const char *positionCommandTopic);
   void setPresetTemperatureCommandTopic(
       const char *presetTemperatureCommandTopic);
+  void setPresetTemperatureHighCommandTopic(
+      const char *presetTemperatureHighCommandTopic);
   void setStateTemplate(const char *stateTemplate);
   void setCommandTemplate(const char *commandTemplate);
   void setCommandTemplateOn(const char *commandTemplateOn);
   void setCommandTemplateOff(const char *commandTemplateOff);
   void setPresetTemperatureCommandTemplate(
       const char *presetTemperatureCommandTemplate);
+  void setPresetTemperatureHighCommandTemplate(
+      const char *presetTemperatureHighCommandTemplate);
   void setExecute(const char *execute);
   void setExecuteOn(const char *execute);
   void setExecuteOff(const char *execute);
@@ -241,7 +260,9 @@ class client_device_channel {
   void setEsphomeCover(bool esphomeCover);
   void setEsphomeRgbw(bool esphomeRgbw);
   void setHvacSubfunctionCool(bool hvacSubfunctionCool);
+  void setHvacReportAsThermostat(bool value);
   void setHvacMainThermometerChannelNo(unsigned char channelNo);
+  void setHvacConfig(const TChannelConfig_HVAC *hvacConfig);
   void setGeneralValueDivider(_supla_int_t value);
   void setGeneralValueMultiplier(_supla_int_t value);
   void setGeneralValueAdded(_supla_int64_t value);
@@ -285,6 +306,16 @@ class client_device_channel {
                              double presetTemperature);
   void updateHvacState(bool hasOn, bool on, bool hasSetpointTemperature,
                        double setpointTemperature);
+  void updateHvacFanState(bool hasOn, bool on, bool hasMode,
+                          unsigned char mode);
+  void updateHvacDifferentialState(bool hasOn, bool on, bool hasMode,
+                                   unsigned char mode,
+                                   bool hasSetpointTemperatureLow,
+                                   double setpointTemperatureLow,
+                                   bool hasSetpointTemperatureHigh,
+                                   double setpointTemperatureHigh,
+                                   bool hasHeatingState, bool heatingState,
+                                   bool hasCoolingState, bool coolingState);
   void transformIncomingState(char value[SUPLA_CHANNELVALUE_SIZE]);
 
   void toggleValue(void);
