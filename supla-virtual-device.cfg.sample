@@ -26,6 +26,7 @@ host=192.168.1.100
 port=1883
 username=mqtt-user
 password=mqtt-password
+# use a unique client_name for each instance if multiple virtual devices connect to the same broker
 client_name=supla-virtual-device
 
 # ------------------------------------------------------------------

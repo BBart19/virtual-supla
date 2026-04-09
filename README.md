@@ -60,6 +60,10 @@ hostname, identifier of a location and its password. If you want to use it with 
 you must fill MQTT section fields like `host`, `port` and if used `username` and `password` 
 After successful lauch of the `supla-virtual-device` it will create a device in that location.
 
+If you run more than one `supla-virtual-device` instance against the same MQTT broker,
+set a different `client_name` for each instance. Reusing the same MQTT client ID on two
+instances will make the broker disconnect one of them.
+
 Then you can put as many channels in this virtual device as you wish, 
 following the template.
 

@@ -22,11 +22,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 void* mqtt_deamon_thread = NULL;
 struct reconnect_state_t* reconnect_state = NULL;
 struct mqtt_client* mq_client = NULL;
+
+static const unsigned int MQTT_RECONNECT_DELAY_MIN_SEC = 1;
+static const unsigned int MQTT_RECONNECT_DELAY_MAX_SEC = 5;
+static const unsigned int MQTT_ERROR_LOG_INTERVAL_SEC = 5;
 
 void reconnect_client(struct mqtt_client* client, void** reconnect_state_vptr);
 
@@ -56,8 +61,12 @@ int open_nb_socket(const char* addr, uint16_t port) {
     if (sockfd == -1) continue;
 
     /* connect to server */
-    rv = connect(sockfd, servinfo->ai_addr, servinfo->ai_addrlen);
-    if (rv == -1) continue;
+    rv = connect(sockfd, p->ai_addr, p->ai_addrlen);
+    if (rv == -1) {
+      close(sockfd);
+      sockfd = -1;
+      continue;
+    }
     break;
   }
 
@@ -97,6 +106,10 @@ int mqtt_client_init(std::string addr, int port, std::string username,
   reconnect_state->username = username;
   reconnect_state->password = password;
   reconnect_state->client_name = client_name;
+  reconnect_state->next_reconnect_attempt_at = 0;
+  reconnect_state->last_error_log_at = 0;
+  reconnect_state->last_error_code = MQTT_OK;
+  reconnect_state->reconnect_delay_sec = MQTT_RECONNECT_DELAY_MIN_SEC;
 
   for (auto topic : topics) reconnect_state->topics.push_back(topic);
 
@@ -138,6 +151,7 @@ void mqtt_client_publish(const char* topic, const char* payload, char retain,
 void reconnect_client(struct mqtt_client* client, void** reconnect_state_vptr) {
   struct reconnect_state_t* reconnect_state =
       *((struct reconnect_state_t**)reconnect_state_vptr);
+  time_t now = time(NULL);
 
   /* Close the clients socket if this isn't the initial reconnect call */
   if (client->error != MQTT_ERROR_INITIAL_RECONNECT) {
@@ -146,8 +160,17 @@ void reconnect_client(struct mqtt_client* client, void** reconnect_state_vptr) {
 
   /* Perform error handling here. */
   if (client->error != MQTT_ERROR_INITIAL_RECONNECT) {
-    cout << "mqtt client error " << mqtt_error_str(client->error) << endl;
-    // sleep(5);
+    if (reconnect_state->last_error_code != client->error ||
+        now - reconnect_state->last_error_log_at >=
+            MQTT_ERROR_LOG_INTERVAL_SEC) {
+      cout << "mqtt client error " << mqtt_error_str(client->error) << endl;
+      reconnect_state->last_error_log_at = now;
+      reconnect_state->last_error_code = client->error;
+    }
+  }
+
+  if (reconnect_state->next_reconnect_attempt_at > now) {
+    return;
   }
 
   supla_log(LOG_DEBUG, "connecting to %s on port %d using protocol version %d",
@@ -155,17 +178,22 @@ void reconnect_client(struct mqtt_client* client, void** reconnect_state_vptr) {
             client->protocol_version);
 
   if (reconnect_state->username.length() > 0) {
-    supla_log(LOG_DEBUG, "using credentials %s %s",
-              reconnect_state->username.c_str(),
-              reconnect_state->password.c_str());
+    supla_log(LOG_DEBUG, "using MQTT username %s",
+              reconnect_state->username.c_str());
   }
 
   /* Open a new socket. */
   int sockfd =
       open_nb_socket(reconnect_state->hostname.c_str(), reconnect_state->port);
   if (sockfd == -1) {
-    cout << "socket error" << endl;
-    sleep(5);
+    reconnect_state->next_reconnect_attempt_at =
+        now + reconnect_state->reconnect_delay_sec;
+    if (reconnect_state->reconnect_delay_sec < MQTT_RECONNECT_DELAY_MAX_SEC) {
+      reconnect_state->reconnect_delay_sec *= 2;
+      if (reconnect_state->reconnect_delay_sec > MQTT_RECONNECT_DELAY_MAX_SEC) {
+        reconnect_state->reconnect_delay_sec = MQTT_RECONNECT_DELAY_MAX_SEC;
+      }
+    }
     client->error = MQTT_ERROR_INITIAL_RECONNECT;
     return;
   }
@@ -198,10 +226,15 @@ void reconnect_client(struct mqtt_client* client, void** reconnect_state_vptr) {
   mqtt_connect(client, client_name, NULL, NULL, 0, username, password, 0, 400);
 
   /* Subscribe to the topic. */
+  supla_log(LOG_DEBUG, "subscribing %zu MQTT topic(s)",
+            reconnect_state->topics.size());
   for (auto topic : reconnect_state->topics) {
-    supla_log(LOG_DEBUG, "subscribing %s", topic.c_str());
     mqtt_subscribe(client, topic.c_str(), 0);
   }
+
+  reconnect_state->next_reconnect_attempt_at = 0;
+  reconnect_state->reconnect_delay_sec = MQTT_RECONNECT_DELAY_MIN_SEC;
+  reconnect_state->last_error_code = MQTT_OK;
 }
 
 void mqtt_client_free() {

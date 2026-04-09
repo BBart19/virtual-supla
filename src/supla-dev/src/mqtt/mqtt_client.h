@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <iostream>
@@ -48,6 +49,10 @@ struct reconnect_state_t {
   uint8_t* recvbuf;
   size_t recvbufsz;
   vector<std::string> topics;
+  time_t next_reconnect_attempt_at;
+  time_t last_error_log_at;
+  int last_error_code;
+  unsigned int reconnect_delay_sec;
 };
 
 int mqtt_client_init(std::string addr, int port, std::string username,
